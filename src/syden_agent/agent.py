@@ -637,6 +637,21 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     explicit = [cite for cite in verified if cite in verified_text]
     if explicit and _supported_prose(conn, verified_text, explicit):
         verified = explicit
+    else:
+        # A search returns candidate citations, not proof that each source was
+        # used in the answer. Prefer the passages the model actually inspected.
+        inspected = [call.get("args", {}).get("citation") for call in trace
+                     if call.get("name") == "get_evidence" and call.get("ok")]
+        inspected = [cite for cite in verified if cite in inspected]
+        if inspected and _supported_prose(conn, verified_text, inspected):
+            verified = inspected
+        else:
+            # For a single-clause answer, display just the supporting location
+            # even when a broad lexical search returned many irrelevant hits.
+            for cite in verified:
+                if _supported_prose(conn, verified_text, [cite]):
+                    verified = [cite]
+                    break
     # A model cannot establish corpus-wide absence from a few search results.
     # Preserve its supported summary, transparently omitting that extra claim.
     if omitted_completeness:
