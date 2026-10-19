@@ -163,24 +163,25 @@ def _contract_evidence():
     conn = connect(":memory:")
     conn.execute("INSERT INTO documents(path,kind,status) "
                  "VALUES('Contract.pdf','pdf','ready')")
-    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES(1,1,0,?)", (
-        "Scope of Work Contractor shall install two transformers and commission the plant. "
-        "Deliverable: Submit design drawings by 15 November 2026. "
-        "Exclusion: Civil excavation is excluded from this contract.",))
+    passage = ("Scope of Work Contractor shall install two transformers and commission the plant. "
+               "Deliverable: Submit design drawings by 15 November 2026. "
+               "Exclusion: Civil excavation is excluded from this contract.")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES(1,1,0,?)",
+                 (passage,))
     return conn, "Contract.pdf | page 1 | chunk 0"
 
 
 def test_scope_verifier_accepts_supported_paraphrases():
     conn, cite = _contract_evidence()
     valid = (
-        "The project scope includes the installation of two transformers and "
-        "commissioning of the plant. Civil excavation is not included.",
-        "According to the contract, the work comprises installation of two "
-        "transformers and plant commissioning, while civil excavation is excluded.",
-        "The contractor will install two transformers and commission the plant. "
-        "Civil excavation is excluded.",
-        "The contractor will install two transformers and commission the plant "
-        "without civil excavation.",
+        ("The project scope includes the installation of two transformers and "
+         "commissioning of the plant. Civil excavation is not included."),
+        ("According to the contract, the work comprises installation of two "
+         "transformers and plant commissioning, while civil excavation is excluded."),
+        ("The contractor will install two transformers and commission the plant. "
+         "Civil excavation is excluded."),
+        ("The contractor will install two transformers and commission the plant "
+         "without civil excavation."),
         "The contractor must submit design drawings by 15 November 2026.",
     )
     for claim in valid:
