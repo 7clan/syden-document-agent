@@ -707,6 +707,38 @@ def _verified_contact_absence(conn: sqlite3.Connection, citations: list[str],
     return None
 
 
+def _verified_change_order_extension(conn: sqlite3.Connection,
+                                     citations: list[str],
+                                     question: str) -> Answer | None:
+    """Resolve an approved change-order work-and-extension question from its clauses."""
+    if not (re.search(r"(?i)\bchange order\b", question)
+            and re.search(r"(?i)\b(?:extend|extension)\b", question)
+            and re.search(r"(?i)\b(?:work|authoriz(?:e|ed))\b", question)):
+        return None
+    for cite in citations:
+        evidence = get_evidence(conn, cite)
+        if "text" not in evidence:
+            continue
+        clauses = _source_clauses(evidence["text"])
+        work = next((piece for piece in clauses if re.search(
+            r"(?i)\b(?:authorizes|authorised|authorized)\b", piece
+        ) and re.search(r"(?i)\badditional\b", piece)), None)
+        extension = next((piece for piece in clauses if re.search(
+            r"(?i)\bdoes not grant an extension\b", piece
+        )), None)
+        date_clause = next((piece for piece in clauses if re.search(
+            r"(?i)\bdeadline remains\b.*\b\d{4}\b", piece
+        )), None)
+        if work and extension and date_clause:
+            return Answer(
+                "**Approved additional work:** " + work + "\n\n"
+                "**Schedule:** " + extension + " " + date_clause
+                + f"\n\nSource: {cite}",
+                [cite], [],
+            )
+    return None
+
+
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
@@ -733,7 +765,7 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
     for direct in (_verified_circuit_counts, _verified_explicit_exclusions,
-                   _verified_contact_absence):
+                   _verified_contact_absence, _verified_change_order_extension):
         answer = direct(conn, verified, question)
         if answer is not None:
             answer.tool_calls = trace
