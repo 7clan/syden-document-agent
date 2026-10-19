@@ -1,7 +1,9 @@
 """Safely copy files selected in the browser into the active document folder."""
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from .ingest import SUPPORTED
@@ -13,11 +15,13 @@ _RESERVED_WINDOWS_NAMES = re.compile(
 
 
 def save_uploaded_file(folder: str | Path, filename: str,
-                       content: bytes | memoryview, max_bytes: int) -> str:
-    """Save one user-selected file, never replacing any existing document.
+                       content: bytes | memoryview, max_bytes: int,
+                       *, replace_existing: bool = False) -> str:
+    """Save a document; replace an exact filename only with explicit approval.
 
-    Returns the actual filename (for example, 'Contract (2).pdf' after a
-    collision). Raises ValueError before writing for unsafe names or sizes.
+    The default safely renames duplicates, e.g. 'Contract (2).pdf'. A confirmed
+    replacement uses a temporary file and atomic rename, so a write failure
+    cannot corrupt the existing file. The caller must re-index after saving.
     """
     if (not filename or filename != filename.strip()
             or len(filename) > 180 or filename.startswith(".")
@@ -34,6 +38,26 @@ def save_uploaded_file(folder: str | Path, filename: str,
         raise ValueError(f"File exceeds the configured {max_bytes // 1024 // 1024} MiB limit.")
 
     destination = Path(folder).expanduser().resolve()
+    if replace_existing:
+        target = destination / filename
+        if not target.is_file():
+            raise ValueError("Replacement target not found; file was not saved.")
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode="wb", dir=destination, prefix=".syden-update-",
+                    suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # The exact extension/name is preserved; never select by basename.
+            os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return filename
+
     destination.mkdir(parents=True, exist_ok=True)
     for attempt in range(1, 1001):
         name = (filename if attempt == 1 else
