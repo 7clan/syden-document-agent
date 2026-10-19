@@ -124,7 +124,7 @@ def test_qa_pass_counts_visible_in_relevant_fallback():
             [cite], [{"name": "get_evidence", "ok": True}],
             "How many circuits passed inspection and how many require retesting?",
         )
-        assert "4 circuits passed; 2 circuits require retesting" in result.text
+        assert "Four circuits passed and two circuits require retesting" in result.text
         assert "QUALITY INSPECTION RECORD" not in result.text
     finally:
         conn.close()
