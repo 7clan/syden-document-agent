@@ -5,14 +5,15 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any
 
 from dotenv import load_dotenv
 
-from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
 from .semantic_verifier import VERIFIER_SYSTEM, verification_request, verify_judgement
+from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
 
 load_dotenv()
 
