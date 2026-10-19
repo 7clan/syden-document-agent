@@ -101,6 +101,26 @@ Both actions require a separate confirmation checkbox and button. After a
 successful action, the index is refreshed automatically. Files with the same
 basename but different extensions are managed independently.
 
+### General-purpose evidence verification
+
+The agent verifies retrieved source citations and handles numerical BOQ calculations
+with Python. For ordinary prose it first tries a conservative clause verifier.
+If that rejects a paraphrase, the selected model performs **one additional
+semantic verification call** with the draft answer and the actual indexed
+passages. It must confirm every claim and supply exact source quotations.
+Python checks that each quote exists at the cited passage and that all
+numbers claimed in the draft appear in those supporting quotations. If any
+step is uncertain or fails, the agent falls back to source excerpts.
+
+This second verification pass is **not a mathematical guarantee of truth**:
+the verifier can still make semantic mistakes, even when using exact quotes.
+Test it on unseen documents, including deliberate contradiction and negation
+cases, rather than trusting a set of sample-PDF-specific exceptions.
+Because it may make an additional API request for an initially rejected
+answer, it can add latency and provider usage charges. Set
+`SYDEN_SEMANTIC_VERIFY=0` in `.env` to disable that second request and
+use strict local verification only.
+
 ### Choose a provider and model in Streamlit
 
 The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
