@@ -419,14 +419,18 @@ def _has_dates_result(trace: list[dict[str, Any]]) -> bool:
                for call in trace)
 
 
-def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int) -> Answer:
+def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
+                model_override: str | None = None) -> Answer:
     from google import genai
     from google.genai import types
 
     key = os.getenv("GEMINI_API_KEY", "")
     if not key:
         raise ValueError("GEMINI_API_KEY missing. Copy .env.example to .env and set it.")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = (model_override if model_override is not None
+             else os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    if not model.strip():
+        raise ValueError("A Gemini model ID is required.")
     client = genai.Client(api_key=key)
     funcs = [types.FunctionDeclaration(name=t["name"], description=t["description"],
                                         parameters_json_schema=t["parameters"]) for t in TOOL_SCHEMAS]
@@ -478,7 +482,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int) -> Ans
                   _verified_sources(conn, citations), tool_calls)
 
 
-def _compatible_config(provider: str) -> tuple[str, str, str]:
+def _compatible_config(provider: str, model_override: str | None = None) -> tuple[str, str, str]:
     """Return (API key, model, base URL) for Chat Completions-compatible services."""
     configs = {
         "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL", "gpt-4.1-mini", ""),
@@ -492,7 +496,8 @@ def _compatible_config(provider: str) -> tuple[str, str, str]:
         raise ValueError(f"Unsupported compatible provider: {provider}")
     key_var, model_var, base_var, default_model, default_base = configs[provider]
     key = os.getenv(key_var, "").strip()
-    model = os.getenv(model_var, default_model).strip()
+    model = (model_override if model_override is not None
+             else os.getenv(model_var, default_model)).strip()
     base_url = os.getenv(base_var, default_base).strip()
     missing = [name for name, val in ((key_var, key), (model_var, model)) if not val]
     if provider == "compatible" and not base_url:
@@ -503,11 +508,11 @@ def _compatible_config(provider: str) -> tuple[str, str, str]:
 
 
 def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
-                provider: str = "openai") -> Answer:
+                provider: str = "openai", model_override: str | None = None) -> Answer:
     """Use an OpenAI Chat Completions-compatible API (OpenAI, Groq/Llama, etc.)."""
     from openai import OpenAI  # optional dependency: pip install -e '.[openai]'
 
-    key, model, base_url = _compatible_config(provider)
+    key, model, base_url = _compatible_config(provider, model_override=model_override)
     client = OpenAI(api_key=key, **({"base_url": base_url} if base_url else {}))
     schemas = [{"type": "function", "function": {"name": t["name"],
                 "description": t["description"], "parameters": t["parameters"]}} for t in TOOL_SCHEMAS]
@@ -561,19 +566,24 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                   _verified_sources(conn,citations),trace)
 
 
-def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8) -> Answer:
+def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8,
+        *, provider: str | None = None, model: str | None = None) -> Answer:
     if not question.strip():
         return Answer("Please enter a question.", [], [])
     if not conn.execute("SELECT 1 FROM documents WHERE status='ready' LIMIT 1").fetchone():
         return Answer("No readable documents are indexed. Ingest a folder first.", [], [])
-    provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
-    if provider == "gemini":
-        answer = _ask_gemini(conn, question, max_rounds)
-    elif provider in ("openai", "groq", "ollama_cloud", "compatible"):
-        answer = _ask_openai(conn, question, max_rounds, provider=provider)
+    chosen_provider = (provider if provider is not None else
+                       os.getenv("LLM_PROVIDER", "gemini")).strip().lower()
+    if model is not None and not model.strip():
+        raise ValueError("Model ID cannot be empty.")
+    if chosen_provider == "gemini":
+        answer = _ask_gemini(conn, question, max_rounds, model_override=model)
+    elif chosen_provider in ("openai", "groq", "ollama_cloud", "compatible"):
+        answer = _ask_openai(conn, question, max_rounds,
+                             provider=chosen_provider, model_override=model)
     else:
         raise ValueError(
-            f"Unsupported LLM_PROVIDER: {provider} "
+            f"Unsupported LLM_PROVIDER: {chosen_provider} "
             "(use gemini, openai, groq, ollama_cloud, compatible)"
         )
     failed = conn.execute("SELECT COUNT(*) FROM documents WHERE status!='ready' "
