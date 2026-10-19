@@ -80,36 +80,65 @@ with st.sidebar:
         accept_multiple_files=True,
         key=f"document_upload_{revision}",
     )
-    if selected_files:
+    target_folder = Path(folder).expanduser().resolve()
+    collisions = [selected.name for selected in selected_files
+                  if (target_folder / selected.name).is_file()]
+    replace_names: set[str] = set()
+    confirmed = bool(selected_files and not collisions)
+    if collisions:
+        st.warning("Some selected filenames already exist in this folder. "
+                   "Confirm whether to replace each existing document or keep both.")
+        for index, filename in enumerate(dict.fromkeys(collisions)):
+            decision = st.radio(
+                f"'{filename}' already exists. Are you sure you want to replace it?",
+                ["Keep both (rename the new file)", "Replace existing file"],
+                index=0, key=f"replace_upload_{revision}_{index}",
+            )
+            if decision == "Replace existing file":
+                replace_names.add(filename)
+        confirmed = st.button("Confirm and import selected files",
+                              type="primary", use_container_width=True)
+        if st.button("Cancel upload", use_container_width=True):
+            st.session_state["_document_upload_revision"] = revision + 1
+            st.rerun()
+    if confirmed:
         added: list[str] = []
+        replaced: list[str] = []
         errors: list[str] = []
         max_bytes = int(os.getenv("SYDEN_MAX_FILE_MB", "100")) * 1024 * 1024
         with st.spinner("Saving and indexing selected documents..."):
             for selected in selected_files:
                 try:
+                    replacing = selected.name in replace_names
                     saved = save_uploaded_file(
                         folder, selected.name, selected.getbuffer(), max_bytes,
+                        replace_existing=replacing,
                     )
-                    added.append(saved)
+                    (replaced if replacing else added).append(saved)
                 except (OSError, ValueError) as exc:
                     errors.append(f"{selected.name}: {exc}")
-            if added:
+            if added or replaced:
                 st.session_state["index_report"] = ingest_folder(conn, folder)
                 st.session_state.pop("last_answer", None)
                 st.session_state.pop("csv_export", None)
         st.session_state["upload_feedback"] = {
             "added": added,
+            "replaced": replaced,
             "errors": errors,
-            "folder": str(Path(folder).expanduser().resolve()),
+            "folder": str(target_folder),
         }
-        # Clear the chooser before the next rerun to avoid repeated uploads.
+        # Reset file chooser so a rerun does not repeat a replacement.
         st.session_state["_document_upload_revision"] = revision + 1
         st.rerun()
     feedback = st.session_state.pop("upload_feedback", None)
     if feedback:
         if feedback["added"]:
-            st.success(f"Added and indexed {len(feedback['added'])} file(s) in "
+            st.success(f"Added {len(feedback['added'])} file(s) in "
                        f"{feedback['folder']}: " + ", ".join(feedback["added"]))
+        if feedback["replaced"]:
+            st.success(f"Replaced {len(feedback['replaced'])} file(s) and refreshed the index: "
+                       + ", ".join(feedback["replaced"]))
+        if feedback["added"] or feedback["replaced"]:
             report = st.session_state["index_report"]
             if report.get("failed") or report.get("error"):
                 st.warning("Some documents could not be indexed; inspect the report below.")
