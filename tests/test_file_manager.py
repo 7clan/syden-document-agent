@@ -24,14 +24,15 @@ def _pdf(sentence: str) -> bytes:
 def test_archive_excludes_only_selected_document_from_next_index(tmp_path):
     root = tmp_path / "documents"
     root.mkdir()
-    (root / "original.pdf").write_bytes(_pdf("Unique original transformers task."))
+    original_content = _pdf("Unique original transformers task.")
+    (root / "original.pdf").write_bytes(original_content)
     (root / "other.pdf").write_bytes(_pdf("Unique other generator task."))
     conn = connect(tmp_path / "index.db")
     try:
         assert ingest_folder(conn, root)["indexed"] == 2
         archived = remove_document(root, "original.pdf")
         assert archived == tmp_path / "documents_removed" / "original.pdf"
-        assert archived.read_bytes() == _pdf("Unique original transformers task.")
+        assert archived.read_bytes() == original_content
         assert not (root / "original.pdf").exists()
         report = ingest_folder(conn, root)
         assert report["failed"] == 0
@@ -73,7 +74,7 @@ def test_sidebar_list_supports_nested_files_and_excludes_archived(tmp_path):
     (root / "costs.xlsx").write_bytes(b"excel")
     (root / "not_supported.txt").write_text("text")
     assert sorted(folder_files(root)) == sorted([
-        "sub/notes.docx" if Path().anchor == "/" else str(Path("sub") / "notes.docx"),
+        str(Path("sub") / "notes.docx"),
         "costs.xlsx",
     ])
     remove_document(root, str(Path("sub") / "notes.docx"))
