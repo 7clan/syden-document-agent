@@ -329,14 +329,14 @@ def test_coordinated_summary_does_not_launder_unsupported_obligations():
     intro = ("Based on the indexed project documents (`Contract.pdf | page 1 | chunk 0`), "
              "the scope of work and exclusions are as follows:\n")
     invalid = (
-        "* **Scope of Work:** The Contractor shall install three transformers and "
-        "submit design drawings by 15 November 2026.",
-        "* **Scope of Work:** The Contractor shall install two transformers "
-        "and perform civil excavation.",
-        "* **Scope of Work:** The Contractor shall install two transformers "
-        "and submit design drawings by 16 November 2026.",
-        "* **Scope of Work:** The Contractor shall install two transformers "
-        "and commission civil excavation.",
+        ("* **Scope of Work:** The Contractor shall install three transformers and "
+         "submit design drawings by 15 November 2026."),
+        ("* **Scope of Work:** The Contractor shall install two transformers "
+         "and perform civil excavation."),
+        ("* **Scope of Work:** The Contractor shall install two transformers "
+         "and submit design drawings by 16 November 2026."),
+        ("* **Scope of Work:** The Contractor shall install two transformers "
+         "and commission civil excavation."),
         "* **Exclusions:** Commissioning the plant is excluded.",
     )
     for claim in invalid:
