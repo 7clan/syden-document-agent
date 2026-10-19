@@ -87,8 +87,85 @@ def _evidence_text(evidence: dict[str, Any]) -> str:
     return ""
 
 
+# Deterministic normalization is intentionally small and domain-specific. It does not
+# attempt to prove arbitrary semantic entailment; uncertain prose remains unverified.
+_PROSE_ALIASES = {
+    "installation": "install", "installing": "install", "installed": "install",
+    "commissioning": "commission", "commissioned": "commission",
+    "transformers": "transformer", "drawings": "drawing",
+    "excavation": "excavate", "excavations": "excavate", "excavating": "excavate",
+    "submitting": "submit", "submission": "submit", "submitted": "submit",
+    "included": "include",
+    "exclusions": "exclude", "exclusion": "exclude", "excluded": "exclude",
+    "excludes": "exclude", "excluding": "exclude",
+    "generators": "generator", "deliverables": "deliverable",
+}
+_PROSE_FILLER = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "in", "of", "for", "to", "and", "or", "with", "by", "on", "at", "as", "from",
+    "this", "that", "these", "those", "it", "its", "which", "where", "who",
+    "project", "document", "file", "contract", "contractor", "source", "says",
+    "according", "summary", "scope", "work", "works", "activities", "activity",
+    "task", "tasks", "following", "describes", "described", "states", "stated",
+    "includes", "include", "including", "involved", "involves", "involve",
+    "comprises", "comprise", "consists", "consist", "covers", "cover",
+    "requires", "required", "responsible", "must", "shall", "will", "should",
+    "perform", "performed", "undertake", "undertaken", "carry", "out", "do",
+    "main", "also", "such", "like", "specific", "exact", "wording", "verbatim",
+    "below", "above", "here", "there", "both", "only", "same", "details",
+    "each", "all", "some", "part", "parts", "item", "items", "namely",
+    "deliverable", "excluded", "exclude", "not", "never", "no", "without",
+    "million", "thousand", "zero", "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten", "first", "second", "third",
+}
+_NUMBER_WORDS = {"zero", "one", "two", "three", "four", "five", "six",
+                 "seven", "eight", "nine", "ten"}
+_NEGATIVE_SCOPE = re.compile(
+    r"\b(?:exclud(?:e|es|ed|ing)|exclusions?|except|not\s+includ(?:e|ed)|"
+    r"not\s+(?:required|permitted|part\s+of|install|commission|submit|"
+    r"deliver|build|construct|provide|perform)|outside\s+(?:the\s+)?scope|"
+    r"without|never|no\s+(?:responsibility|obligation))\b", re.IGNORECASE,
+)
+_POSITIVE_SCOPE = re.compile(
+    r"\b(?:install|commission|submit|deliver|provide|construct|build|perform|"
+    r"undertake|must|shall|required|responsible|includ(?:e|es|ed|ing)|"
+    r"involv(?:e|es|ed|ing)|scope|obligation)\b", re.IGNORECASE,
+)
+
+
+def _prose_tokens(text: str) -> set[str]:
+    tokens = re.findall(r"[a-z]{3,}", text.lower())
+    canonical = {_PROSE_ALIASES.get(token, token) for token in tokens}
+    return {token for token in canonical if token not in _PROSE_FILLER}
+
+
+def _split_prose(text: str) -> list[str]:
+    # Separate mixed scope/exclusion claims so their polarity is checked separately.
+    text = re.sub(r"(?i),?\s*\b(?:while|whereas|but)\b\s*", ". ", text)
+    text = re.sub(r"(?i),\s*(?=(?:excluding|except)\b)", ". ", text)
+    text = re.sub(r"(?i)\s+\b(without)\b\s+", r". \1 ", text)
+    parts = [part.strip(" \t-*:;\r") for part in
+             re.split(r"(?<=[.!?])\s+|[\r\n;]+", text)
+             if part.strip(" \t-*:;\r")]
+    combined: list[str] = []
+    heading = ""
+    for part in parts:
+        if re.fullmatch(r"(?:scope(?: of work)?|exclusions?|deliverables?|"
+                        r"included work|outside scope)", part, re.IGNORECASE):
+            heading = f"{part}: "
+            continue
+        combined.append(heading + part)
+        heading = ""
+    return combined
+
+
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
-    """Reject obvious unsupported claims; semantic entailment is not inferred here."""
+    """Conservatively match factual claims to cited evidence, including simple paraphrases.
+
+    The checker requires each substantive noun/action and each numeric value to appear
+    in a *single* compatible source clause. Excluded scope cannot support a positive
+    obligation (or vice versa). It is not a general-purpose entailment model.
+    """
     evidence_texts = [_evidence_text(get_evidence(conn, cite)) for cite in citations]
     if not any(evidence_texts):
         return False
@@ -98,36 +175,61 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
         claim = claim.replace(citation.split(" | ")[0], "")
     claim = re.sub(r"\b(?:page|chunk|row|paragraph|table)\s+\d+\b", "", claim,
                    flags=re.IGNORECASE)
-    stop = {"the", "a", "an", "is", "are", "in", "of", "for", "to", "and", "or", "with",
-            "this", "that", "these", "those", "project", "document", "file", "contract",
-            "source", "says", "according", "million", "thousand", "summary"}
-    number_words = {"zero", "one", "two", "three", "four", "five", "six", "seven",
-                    "eight", "nine", "ten"}
+    claim = re.sub(r"[*`#]", "", claim)
+    evidence_clauses = [part for evidence in evidence_texts for part in _split_prose(evidence)]
 
-    def supported(sentence: str, evidence: str) -> bool:
-        numbers = re.findall(r"(?<!\w)\d[\d,]*(?:\.\d+)?", sentence)
-        evidence_numbers = {_num(token) for token in
-                            re.findall(r"(?<!\w)\d[\d,]*(?:\.\d+)?", evidence)}
-        if any(_num(token) not in evidence_numbers for token in numbers):
-            return False
-        words = {word for word in re.findall(r"[a-z]{3,}", sentence.lower())
-                 if word not in stop}
-        source_words = set(re.findall(r"[a-z]{3,}", evidence.lower()))
-        if any(word not in source_words for word in words & number_words):
-            return False
-        if any(word in words and word not in source_words for word in
-               ("excluded", "exclude", "not", "never")):
-            return False
-        codes = {code for code in ("sar", "aed", "usd", "eur", "gbp") if code in words}
-        if not codes.issubset(source_words):
-            return False
-        substantive = words - number_words - codes
-        return len(substantive & source_words) >= min(2, len(substantive))
+    def supported(sentence: str) -> bool:
+        key_terms = _prose_tokens(sentence)
+        numbers = {_num(token) for token in
+                   re.findall(r"(?<!\w)\d[\d,]*(?:\.\d+)?", sentence)}
+        written_numbers = set(re.findall(r"[a-z]+", sentence.lower())) & _NUMBER_WORDS
+        is_exclusion = bool(_NEGATIVE_SCOPE.search(sentence))
+        is_positive = bool(_POSITIVE_SCOPE.search(sentence)) and not is_exclusion
+        for passage in evidence_clauses:
+            passage_terms = _prose_tokens(passage)
+            if not key_terms or not key_terms.issubset(passage_terms):
+                continue
+            evidence_numbers = {_num(token) for token in
+                                re.findall(r"(?<!\w)\d[\d,]*(?:\.\d+)?", passage)}
+            if not numbers.issubset(evidence_numbers):
+                continue
+            if not written_numbers.issubset(
+                    set(re.findall(r"[a-z]+", passage.lower())) & _NUMBER_WORDS):
+                continue
+            source_exclusion = bool(_NEGATIVE_SCOPE.search(passage))
+            if is_exclusion and not source_exclusion:
+                continue
+            if is_positive and source_exclusion:
+                continue
+            # A negative statement cannot be supported merely by a shared noun.
+            if is_exclusion and not (key_terms & passage_terms):
+                continue
+            return True
+        return False
 
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", claim)
-                 if part.strip()]
-    return all(any(supported(sentence, evidence) for evidence in evidence_texts)
-               for sentence in sentences)
+    sentences = _split_prose(claim)
+    return bool(sentences) and all(supported(sentence) for sentence in sentences)
+
+
+def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
+                       question: str) -> list[str]:
+    """Safe fallback: use only verbatim, passage-level source excerpts."""
+    excerpts: list[str] = []
+    for citation in citations:
+        evidence = get_evidence(conn, citation)
+        if not ("text" in evidence or "row" in evidence):
+            continue
+        candidates = _split_prose(_evidence_text(evidence))
+        scope_question = bool(re.search(r"\b(?:scope|work|obligations?|exclusions?)\b",
+                                        question, re.IGNORECASE))
+        relevant = [part for part in candidates if
+                    not scope_question or _POSITIVE_SCOPE.search(part) or
+                    _NEGATIVE_SCOPE.search(part)]
+        for part in relevant[:3]:
+            excerpts.append(f"- {part[:300]} — {citation}")
+        if len(excerpts) >= 6:
+            break
+    return excerpts[:6]
 
 
 def _question_filter(question: str, original: dict[str, Any]) -> dict[str, Any]:
@@ -275,9 +377,13 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
     if not _supported_prose(conn, text, verified):
-        evidence = _evidence_text(get_evidence(conn, verified[0]))[:300]
-        return Answer(f"The model's claim could not be verified. Retrieved evidence: "
-                      f"{evidence} — {verified[0]}", verified[:1], trace)
+        excerpts = _verified_extracts(conn, verified, question)
+        if excerpts:
+            return Answer("The model's claim could not be verified. "
+                          "Verified source excerpts (verbatim, not a generated summary):\n" +
+                          "\n".join(excerpts), verified, trace)
+        return Answer("The model's claim could not be verified; "
+                      "no passage-level evidence was available.", verified, trace)
     # Provider-specific citation tokens are not source references. Expose only
     # citations resolved from the local index in Answer.sources.
     clean_text = re.sub(r"【[^】]*】", "", text).strip()
