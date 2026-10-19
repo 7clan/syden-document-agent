@@ -47,8 +47,16 @@ def test_qa_inspect_only_provides_passage_citation(tmp_path):
             "According to 06_QA_Inspection_Report.pdf, how many circuits passed "
             "inspection and how many require retesting?",
             provider="ollama_cloud",
+            semantic_checker=lambda _q, _a, _e: {
+                "supported": True, "complete": True,
+                "supporting_quotes": [{
+                    "citation": "06_QA_Inspection_Report.pdf | page 1 | chunk 0",
+                    "quote": "Four circuits passed and two circuits require retesting.",
+                }],
+            },
         )
-        assert "4 circuits passed; 2 circuits require retesting" in answer.text
+        assert "4 circuits passed inspection" in answer.text
+        assert "2 circuits require retesting" in answer.text
         assert answer.sources == [
             "06_QA_Inspection_Report.pdf | page 1 | chunk 0"
         ]
