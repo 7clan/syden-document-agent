@@ -174,7 +174,7 @@ def _split_coordinated_claims(clause: str) -> list[str]:
 _PRESENTATION_PREFACE = re.compile(
     r"(?i)^based on (?:the )?(?:indexed|provided|retrieved) "
     r"(?:project )?documents?\s*(?:\(\s*\))?\s*,?\s*"
-    r"the scope of work and exclusions are as follows\s*:\s*$"
+    r"the scope of work and exclusions are as follows\s*:?\s*$"
 )
 
 
