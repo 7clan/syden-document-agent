@@ -103,23 +103,41 @@ basename but different extensions are managed independently.
 
 ### General-purpose evidence verification
 
-The agent verifies retrieved source citations and handles numerical BOQ calculations
-with Python. For ordinary prose it first tries a conservative clause verifier.
-If that rejects a paraphrase, the selected model performs **one additional
-semantic verification call** with the draft answer and the actual indexed
-passages. It must confirm every claim and supply exact source quotations.
-Python checks that each quote exists at the cited passage and that all
-numbers claimed in the draft appear in those supporting quotations. If any
-step is uncertain or fails, the agent falls back to source excerpts.
+The tool-calling model returns a JSON answer with individual claims and an
+exact source quotation for each claim. Python checks that each citation was
+retrieved, resolves at the local index, and contains the quote. It also checks
+comparable numbers (including simple written counts), currencies, identifiers,
+dates expressed with numbers, and explicit decision or negation conflicts.
+The displayed answer is assembled from the claims that pass these checks;
+unsupported claims are omitted and counted. Malformed JSON falls back to
+retrieved source excerpts, clearly labeled unverified.
 
-This second verification pass is **not a mathematical guarantee of truth**:
-the verifier can still make semantic mistakes, even when using exact quotes.
-Test it on unseen documents, including deliberate contradiction and negation
-cases, rather than trusting a set of sample-PDF-specific exceptions.
-Because it may make an additional API request for an initially rejected
-answer, it can add latency and provider usage charges. Set
-`SYDEN_SEMANTIC_VERIFY=0` in `.env` to disable that second request and
-use strict local verification only.
+For example, a final prose response has this shape (the `answer` field is
+recorded but the UI renders the individually checked claims):
+
+```json
+{"answer":"Four circuits passed; two need retesting.","insufficient":false,
+ "claims":[{"text":"Four circuits passed.","supports":[
+   {"citation":"Report.pdf | page 1 | chunk 0",
+    "quote":"Four circuits passed and two circuits require retesting."}]}]}
+```
+
+The UI distinguishes **deterministically verified** exact source wording or
+Python BOQ calculations, **evidence-linked** paraphrases whose interpretation
+Python cannot prove, and **unverified** missing or contradictory support.
+An authentic quote does not make its interpretation true. For example, a
+changed quantity or an approved-versus-proposed claim can be rejected, but
+some subtle semantic errors may remain evidence-linked and need human review.
+Tool failures, truncation, and partially indexed files are shown as coverage
+limits. No second model call is made solely to verify a draft answer.
+
+OpenAI Chat Completions uses a strict JSON schema for the response. If that
+format is rejected by the chosen OpenAI model, the generation request is
+retried once with instructed JSON and the fallback appears in the audit trail.
+Gemini, Groq, Ollama Cloud and other compatible endpoints use the same instructed JSON
+contract with local schema and provenance checks; model support varies. The
+old `semantic_verifier.py` is retained for experimental tests and is not in the
+active provider request path.
 
 ### Choose a provider and model in Streamlit
 
@@ -218,6 +236,9 @@ synthetic answer. The smoke command does not read your indexed documents.
 In a clean Windows virtual environment, the editable install completed and all 55
 offline tests and Ruff checks passed on 2026-10-19. The three configured provider
 smoke tests also passed on synthetic text after the audit fixes.
+After the evidence-first refactor on 2026-10-20, the local suite passed 159
+tests with 1 skipped, and Ruff passed. The pull request's GitHub Actions result
+should be checked separately.
 
 ### Observed provider checks (2026-10-19)
 
@@ -231,6 +252,10 @@ This Groq key lists no Llama chat model. `llama-3.3-70b-versatile` and
 `llama-3.1-8b-instant` both returned 404, so Groq-hosted Llama support remains
 untested with this account. The OpenAI provider has not been live-tested because
 no OpenAI API key was supplied. These checks used only generated demo documents.
+After the 2026-10-20 claim refactor, synthetic Groq and Ollama Cloud smoke
+checks returned structured, source-linked claims. Gemini could not be confirmed
+at that time: its configured model returned 503 (high demand), while an old
+Lite model returned 404 and the suggested replacement also returned 503.
 
 ## Current limitations
 

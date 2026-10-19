@@ -19,6 +19,13 @@ uses genuine provider function calls to request evidence; Python checks amounts,
 currency, thresholds, and totals. Gemini, OpenAI, Groq, and Ollama Cloud remain
 configurable through environment variables.
 
+I later changed prose verification to claim-level source quotations and local
+checks. This avoids a verification-only model request. Exact extracted wording
+and Python calculations can be checked deterministically; a paraphrased legal
+or technical interpretation is shown as evidence-linked, with the source and
+the remaining uncertainty visible. My earlier 2–3 hour estimate has not been
+updated for this additional work and must be revised before submission.
+
 With more time I would add OCR for scanned PDFs, improve extraction of complex
 merged or borderless BOQ tables, measure retrieval quality on a larger unseen
 document set, and test the final submission on a fresh machine. I would also

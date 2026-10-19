@@ -80,3 +80,26 @@ call. This verifies the configured models, not all models offered by each host.
 The final live Gemini BOQ check returned two SAR rows (C2 and C4), a SAR
 3,750,000 sum, and no false incompleteness warning from the unrelated
 `Milestones.xlsx` workbook. Its trace included `query_spreadsheet`.
+
+## Evidence-first claim refactor (2026-10-20)
+
+The provider answer path now asks for one JSON answer with claim-level source
+quotes. Local checks verify quote/citation integrity and comparable facts;
+paraphrases are labeled evidence-linked rather than semantically proven.
+The final answer is rendered from validated claims. No second provider request
+is made solely to verify wording. `tests/test_claim_verifier.py` covers word
+versus digit counts, wrong amounts/currencies/dates/identifiers, false quotes,
+negation, approval status, conflicting sources, multiple passages, wrong file,
+malformed output, and tool failures. The offline suite passed 159 tests with
+1 skipped after these additions. The three-case acceptance check in
+`test_claim_verifier.py` had 0 false accepts and 0 false rejects; this is a
+small synthetic regression set, not a real-world accuracy estimate.
+The OpenAI mock also verifies a single schema-rejection retry using instructed
+JSON, with no verification-only request.
+
+Live synthetic Groq and Ollama Cloud smoke checks produced structured answers
+and actual document tool calls. Gemini was not confirmed for this refactor:
+the configured model returned 503 due to high demand; an older Lite model
+returned 404, and the provider-suggested Lite model returned 503. These are
+provider responses, not passing application checks. OpenAI remains untested
+without a key. Test the chosen model again before a live demo.
