@@ -204,7 +204,7 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
         # Keep the footer if there is any additional unsupported text on it.
         text = "\n".join(line for line in text.split("\n") if not re.fullmatch(
             rf"\s*\*?\s*Source:\s*{filename}\s*[,|]\s*page\s+\d+"
-            rf"\s*[,|]\s*chunk\s+\d+\s*\*?\.?\s*",
+            rf"\s*[,|]\s*chunk\s+\d+\s*[.*]*\s*",
             line, flags=re.IGNORECASE,
         ))
     return text
