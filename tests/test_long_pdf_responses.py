@@ -1,8 +1,9 @@
 """Regress contract and inspection questions against wrapped PDF text."""
 from __future__ import annotations
 
-from syden_agent.agent import _final_answer, _source_clauses, _supported_prose
+from syden_agent.agent import _final_answer, _source_clauses, _supported_prose, ask
 from syden_agent.db import connect
+from syden_agent.tools import search_documents
 
 
 def _evidence(pages):
@@ -188,5 +189,31 @@ def test_contract_sum_paraphrase_and_grounded_sources_footer_pass():
                 "What is the original contract value?", provider="gemini",
             )
             assert "Verified source excerpts" in failed.text
+    finally:
+        conn.close()
+
+
+
+def test_exact_contract_value_search_prioritizes_correct_pdf_page():
+    conn, citations = _evidence([
+        "MAIN CONTRACT | NORTH HARBOR\nAll values are fictional for testing.",
+        ("6. Contract sum\n"
+         "The original signed contract value is SAR 6,750,000."),
+    ])
+    try:
+        matches = search_documents(conn, "contract value")["results"]
+        assert matches[0]["citation"] == citations[1]
+    finally:
+        conn.close()
+
+
+def test_unresolved_those_items_followup_does_not_guess_boq_filter():
+    conn, _ = _evidence(["The original contract is SAR 6,750,000."])
+    try:
+        result = ask(conn, "What is the total amount of those items?", provider="gemini")
+        assert "Each question is independent" in result.text
+        assert "strictly above SAR 1,000,000" in result.text
+        assert result.sources == []
+        assert result.tool_calls == []
     finally:
         conn.close()
