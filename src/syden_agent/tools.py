@@ -61,12 +61,16 @@ def inspect_document(conn: sqlite3.Connection, file: str) -> dict[str, Any]:
     return {"document": doc, "sheets": sheets}
 
 
-def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20) -> dict[str, Any]:
+def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20,
+                     file: str = "") -> dict[str, Any]:
     """Bounded lexical retrieval across PDF, Word and worksheet rows."""
     query = _clean(query)[:200]
     if not query:
         return {"error": "Search query is empty"}
     limit = min(max(int(limit), 1), 100)
+    if not isinstance(file, str):
+        return {"error": "File filter must be a filename"}
+    file = file.strip()
     terms = list(dict.fromkeys(re.findall(r"[\w]+", query.lower())))
     phrase = " ".join(query.casefold().split())
     if not terms:
@@ -85,7 +89,8 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20) -> d
 
     for row in conn.execute("SELECT d.path,p.page,p.chunk,p.text FROM passages p JOIN documents d "
                             "ON d.id=p.document_id WHERE d.status='ready' "
-                            "ORDER BY d.path,p.page,p.chunk"):
+                            "AND (? = '' OR d.path = ?) "
+                            "ORDER BY d.path,p.page,p.chunk", (file, file)):
         haystack = row["text"].lower()
         score = sum(t in haystack for t in terms)
         # The exact phrase "contract value" must outrank a page that merely
@@ -97,14 +102,16 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20) -> d
                   "preview": row["text"][:1300], "score": score})
     for row in conn.execute("SELECT d.path,w.location,w.section,w.text FROM word_blocks w "
                             "JOIN documents d ON d.id=w.document_id WHERE d.status='ready' "
-                            "ORDER BY d.path,w.ordinal"):
+                            "AND (? = '' OR d.path = ?) "
+                            "ORDER BY d.path,w.ordinal", (file, file)):
         preview = f"{row['section']}: {row['text']}" if row["section"] else row["text"]
         score = sum(t in preview.lower() for t in terms)
         if score:
             keep({"citation": _word_citation(row), "preview": preview[:1300], "score": score})
     for row in conn.execute("SELECT d.path,s.sheet,s.row_num,s.cells_json FROM sheet_rows s "
                             "JOIN documents d ON d.id=s.document_id WHERE d.status='ready' "
-                            "ORDER BY d.path,s.sheet,s.row_num"):
+                            "AND (? = '' OR d.path = ?) "
+                            "ORDER BY d.path,s.sheet,s.row_num", (file, file)):
         cells = json.loads(row["cells_json"])
         text = " ".join(_clean(e["value"]) for e in cells.values()).lower()
         score = sum(t in text for t in terms)
@@ -295,7 +302,7 @@ TOOL_SCHEMAS = [
     {"name": "inspect_document", "description": "Inspect an exact PDF, Word document or Excel workbook and preview its contents. Call before ambiguous spreadsheet queries.",
      "parameters": {"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]}},
     {"name": "search_documents", "description": "Search PDF text, Word paragraphs and tables, and spreadsheet rows for clauses, scope, deliverables and terminology. Returns source references.",
-     "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}},
+     "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "file": {"type": "string"}}, "required": ["query"]}},
     {"name": "query_spreadsheet", "description": "Run READ-ONLY numeric BOQ queries. Set operator='all' with no value to list/sum all rows; provide value for gt/gte/lt/lte/eq comparisons. Return exact source cells and warnings. Paginate with offset.",
      "parameters": {"type": "object", "properties": {
          "column_hint": {"type": "string"}, "operator": {"type": "string", "enum": ["gt","gte","lt","lte","eq","all"]},
