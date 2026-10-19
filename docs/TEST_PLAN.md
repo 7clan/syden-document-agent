@@ -124,3 +124,41 @@ An unknown explicitly named file cannot borrow another file's citation.
 A correct paraphrase remains evidence-linked; exact source wording remains
 deterministically verified.
 These synthetic cases do not measure accuracy on unseen project documents.
+
+## Scoped provenance architecture check (2026-10-20)
+
+`tests/test_architecture_correction.py` uses fictional PDF, Word, and Excel
+evidence to check locally resolved character spans, optional exact quotes,
+question-part filename scope, numeric and decision conflicts, a successful
+tool retry after an error, nonexhaustive search truncation, ambiguous singular
+filenames, repeated tool calls, one optional malformed-JSON generation retry,
+per-workbook subtotals, and financial PDFs unrelated to BOQs.
+
+The four explicit comparable-fact cases in that file had zero false accepts
+and zero false rejects. A separate adversarial role-reversal claim remains
+**evidence-linked** even though its interpretation is wrong: provenance and
+shared words cannot prove who performed the action. Treat evidence-linked
+answers as requiring review. These five cases are a small regression set,
+not an accuracy benchmark.
+
+Live requests against the fictional demo and a newly generated isolated
+PDF/DOCX/XLSX corpus produced these observations:
+
+| Scenario | Before correction | After correction |
+| --- | --- | --- |
+| QA counts, Gemini | Dropped the correct four-passed claim | Four passed and two retesting retained with PDF spans; evidence-linked, 15.0 s |
+| CO-07 revised sum, Groq | Correct amount rejected or called incomplete | SAR 7,070,000 retained with PDF page and local span; evidence-linked, 10.0 s |
+| PDF plus Word question, Gemini | Valid PDF claims rejected when question named Word file | All three facts retained across both documents; exact source wording, 16.5 s |
+| QA counts, Ollama Cloud | Passed once, then two malformed JSON responses during correction | Both counts retained with PDF spans on a later run, 8.7 s; output format remains variable |
+| Unfamiliar workbook, Ollama Cloud | Correct two cells and SAR 2,750,000 | Same deterministic result, 13.7 s |
+| Ambiguous singular contract | Groq silently chose one contract | CLI asks which indexed contract file is intended |
+| All demo BOQs | Correct SAR 11,004,500, but unrelated PDF warnings | SAR 11,004,500; separate workbook subtotals SAR 6,254,500 and SAR 4,750,000; no warnings |
+
+Two final Groq calls encountered HTTP 429 token-per-minute limits. The
+previously slow Groq BOQ and missing-detail cases therefore could not be
+retested after correction; this is a provider quota result, not a passing
+application check. OpenAI remains untested with a live key. Provider-internal
+request and token totals are not instrumented, so latency is per CLI invocation
+and may include several normal tool-calling rounds. No second semantic
+verification request is used. The optional JSON retry is generation-only and
+is bounded to one additional request.

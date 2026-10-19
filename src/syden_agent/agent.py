@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -12,7 +13,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .claim_verifier import validate_claims
+from .claim_verifier import _explicit_files, parse_answer, question_parts, validate_claims
 from .semantic_verifier import verify_judgement
 from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
 
@@ -38,10 +39,13 @@ say 'Not found in the indexed documents', with an explanation when appropriate.
 Copy identifiers exactly as stored, including ASCII hyphens; do not substitute typographic punctuation.
 For a final prose answer, return ONLY a JSON object with keys answer (string),
 insufficient (boolean), and claims (array). Each claim has text (one factual
-statement) and supports (array of {citation, quote}). The quote must be an exact
-contiguous excerpt from the cited tool evidence, allowing PDF line wrapping.
+statement) and supports (array of {citation, quote}). A nonempty quote must be
+an exact excerpt from cited tool evidence, allowing PDF line wrapping.
 Use only citations returned by tools in this conversation. Split claims so each
-has its own support. Set insufficient=true when the evidence cannot answer.
+has its own support. A support's quote may be an empty string when you cannot
+copy an exact excerpt: Python will resolve a local span from the cited source.
+For each claim set question_part to the zero-based question part it answers.
+Set insufficient=true when the evidence cannot answer.
 The answer field summarizes your conclusion; the application will display only
 claims that pass local provenance and comparable-fact checks. Do not make a
 corpus-wide absence or completeness claim from a few search results.
@@ -58,13 +62,14 @@ ANSWER_SCHEMA = {
             "type": "object", "additionalProperties": False,
             "properties": {
                 "text": {"type": "string"},
+                "question_part": {"type": "integer"},
                 "supports": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False,
                     "properties": {"citation": {"type": "string"}, "quote": {"type": "string"}},
                     "required": ["citation", "quote"],
                 }},
             },
-            "required": ["text", "supports"],
+            "required": ["text", "question_part", "supports"],
         }},
     },
     "required": ["answer", "insufficient", "claims"],
@@ -106,6 +111,18 @@ def _execute(conn: sqlite3.Connection, name: str, args: dict[str, Any]) -> dict[
         return {"error": f"Invalid tool arguments: {exc}"}
     except Exception as exc:  # noqa: BLE001 - isolate provider-selected tool failures
         return {"error": f"Tool failed: {type(exc).__name__}: {exc}"}
+
+
+def _cached_tool(conn: sqlite3.Connection, name: str, args: dict[str, Any],
+                 cache: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], bool]:
+    """Avoid repeated local queries when a model loops on the same tool call."""
+    key = json.dumps([name, args], sort_keys=True, default=str)
+    if key in cache:
+        return cache[key], True
+    result = _execute(conn, name, args)
+    if "error" not in result:
+        cache[key] = result
+    return result, False
 
 
 def _verified_sources(conn: sqlite3.Connection, observed: list[str]) -> list[str]:
@@ -512,6 +529,10 @@ def _verified_numeric_answer(conn: sqlite3.Connection, question: str,
              f"Known matching BOQ items: {result['total_matches']}; results are incomplete."]
     if result["matched_amount_sums"]:
         lines.append(f"Sum of known matching amounts by currency: {result['matched_amount_sums']}.")
+    by_file = result["matched_amount_sums_by_file"]
+    if len(by_file) > 1:
+        lines.append("Workbook/document subtotals: " + "; ".join(
+            f"{path}: {amounts}" for path, amounts in by_file.items()) + ".")
     for row in valid:
         labels = [str(value) for value in row["values"].values()
                   if isinstance(value, str) and value.strip() and
@@ -658,9 +679,15 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                       [], trace)
     if structured_mode:
         result = validate_claims(conn, text, verified, question)
-        retrieval_issues = [call["name"] for call in trace
-                            if not call.get("ok", True) or call.get("truncated")
-                            or call.get("incomplete")]
+        latest: dict[str, dict[str, Any]] = {}
+        for call in trace:
+            if call.get("name") in TOOLS:
+                latest[call["name"]] = call
+        exhaustive = bool(re.search(r"(?i)\b(?:all|every|complete|entire|exhaustive)\b",
+                                    question))
+        retrieval_issues = [name for name, call in latest.items()
+                            if not call.get("ok", True) or call.get("incomplete")
+                            or (exhaustive and call.get("truncated"))]
         if retrieval_issues:
             if result["status"] == "deterministically_verified":
                 result["status"] = "evidence_linked"
@@ -795,6 +822,15 @@ def _has_dates_result(trace: list[dict[str, Any]]) -> bool:
                for call in trace)
 
 
+def _scoped_question(question: str) -> str:
+    parts = question_parts(question)
+    if len(parts) == 1:
+        return question
+    return (question + "\n\nAnswer these separately numbered question parts. "
+            "Set each claim's question_part to the matching zero-based number: "
+            + " ".join(f"[{index}] {part}." for index, part in enumerate(parts)))
+
+
 def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 model_override: str | None = None) -> Answer:
     from google import genai
@@ -807,7 +843,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
              else os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     if not model.strip():
         raise ValueError("A Gemini model ID is required.")
-    client = genai.Client(api_key=key)
+    client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=30000))
 
     funcs = [types.FunctionDeclaration(name=t["name"], description=t["description"],
                                         parameters_json_schema=t["parameters"]) for t in TOOL_SCHEMAS]
@@ -816,11 +852,18 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
         system_instruction=SYSTEM, tools=[functions], temperature=0,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
-    contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
+    contents = [types.Content(role="user", parts=[
+        types.Part.from_text(text=_scoped_question(question))])]
     tool_calls: list[dict[str, Any]] = []
     citations: list[str] = []
     numeric_args: dict[str, Any] | None = None
+    cache: dict[str, dict[str, Any]] = {}
+    stalled = 0
+    deadline = time.monotonic() + 75
     for _ in range(max_rounds):
+        if time.monotonic() >= deadline:
+            return Answer("Provider time budget reached; narrow the question and retry.",
+                          _verified_sources(conn, citations), tool_calls)
         response = client.models.generate_content(model=model, contents=contents, config=config)
         calls = response.function_calls or []
         if not calls:
@@ -844,20 +887,32 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                           _verified_sources(conn,citations), tool_calls)
         contents.append(response.candidates[0].content)
         parts = []
+        all_repeated = True
         for call in calls:
             args = dict(call.args or {})
-            result = _execute(conn, call.name, args)
+            result, repeated = _cached_tool(conn, call.name, args, cache)
+            all_repeated &= repeated
             if call.name == "query_spreadsheet" and "error" not in result:
                 numeric_args = args
             citations.extend(_collect_citations(result))
             tool_calls.append({"name": call.name, "args": args,
                                "ok": "error" not in result,
+                               "reused": repeated,
                                "truncated": bool(result.get("truncated") or result.get("has_more")),
                                "incomplete": bool(result.get("incomplete")),
                                "result_preview": json.dumps(result, default=str)[:1000]})
             parts.append(types.Part(function_response=types.FunctionResponse(
                 id=call.id, name=call.name, response={"result": result})))
         contents.append(types.Content(role="user", parts=parts))
+        stalled = stalled + 1 if all_repeated else 0
+        if stalled >= 2:
+            return Answer("The provider repeated the same searches without new evidence. "
+                          "Please narrow the question.",
+                          _verified_sources(conn, citations), tool_calls)
+        if stalled:
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                text="Those tool results were already returned. Finish with a JSON answer "
+                     "using available evidence, or set insufficient=true.")]))
     return Answer("Tool-call limit reached. Evidence below may be incomplete.",
                   _verified_sources(conn, citations), tool_calls)
 
@@ -893,21 +948,30 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     from openai import OpenAI  # optional dependency: pip install -e '.[openai]'
 
     key, model, base_url = _compatible_config(provider, model_override=model_override)
-    client = OpenAI(api_key=key, **({"base_url": base_url} if base_url else {}))
+    client = OpenAI(api_key=key, timeout=30.0, max_retries=0,
+                    **({"base_url": base_url} if base_url else {}))
 
     schemas = [{"type": "function", "function": {"name": t["name"],
                 "description": t["description"], "parameters": t["parameters"]}} for t in TOOL_SCHEMAS]
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM},
-                                     {"role": "user", "content": question}]
+                                     {"role": "user", "content": _scoped_question(question)}]
     trace: list[dict[str, Any]] = []
     citations: list[str] = []
     numeric_args: dict[str, Any] | None = None
     force_numeric = False
+    format_retry = False
     native_schema = provider == "openai"
+    cache: dict[str, dict[str, Any]] = {}
+    stalled = 0
+    deadline = time.monotonic() + 75
     for _ in range(max_rounds):
+        if time.monotonic() >= deadline:
+            return Answer("Provider time budget reached; narrow the question and retry.",
+                          _verified_sources(conn, citations), trace)
         request = {
             "model": model, "messages": messages, "tools": schemas,
-            "tool_choice": ({"type": "function", "function": {"name": "query_spreadsheet"}}
+            "tool_choice": ("none" if format_retry else
+                            {"type": "function", "function": {"name": "query_spreadsheet"}}
                             if force_numeric else "auto"), "temperature": 0,
         }
         if native_schema:
@@ -938,21 +1002,37 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content": "Call extract_dates before answering."})
                 continue
+            if (citations and not _needs_numeric_query(question)
+                    and not _needs_dates_query(question)
+                    and parse_answer(text) is None and not format_retry):
+                format_retry = True
+                trace.append({"name": "format_retry", "ok": True,
+                              "reason": "Provider answer was not valid JSON; one generation retry"})
+                messages.append({"role": "assistant", "content": text})
+                messages.append({"role": "user", "content":
+                                 "Return the answer as syntactically valid JSON only, with "
+                                 "answer, insufficient, and claims. Each claim needs text, "
+                                 "question_part, and supports with citation and quote. "
+                                 "Use only tool evidence already retrieved. Do not add facts."})
+                continue
             return _final_answer(conn, text, citations, trace, question, numeric_args,
                                  _has_dates_result(trace), provider=provider,
                                  structured_mode=True)
         messages.append(msg.model_dump(exclude_none=True))
+        all_repeated = True
         for call in msg.tool_calls:
             try:
                 args = json.loads(call.function.arguments)
             except json.JSONDecodeError:
                 args = {}
-            result = _execute(conn, call.function.name, args)
+            result, repeated = _cached_tool(conn, call.function.name, args, cache)
+            all_repeated &= repeated
             if call.function.name == "query_spreadsheet" and "error" not in result:
                 numeric_args = args
             citations.extend(_collect_citations(result))
             trace.append({"name": call.function.name,"args": args,
                           "ok": "error" not in result,
+                          "reused": repeated,
                           "truncated": bool(result.get("truncated") or result.get("has_more")),
                           "incomplete": bool(result.get("incomplete")),
                           "result_preview": json.dumps(result, default=str)[:1000]})
@@ -960,6 +1040,15 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                              "content": json.dumps(result, default=str)})
         if _has_numeric_result(trace):
             force_numeric = False
+        stalled = stalled + 1 if all_repeated else 0
+        if stalled >= 2:
+            return Answer("The provider repeated the same searches without new evidence. "
+                          "Please narrow the question.",
+                          _verified_sources(conn, citations), trace)
+        if stalled:
+            messages.append({"role": "user", "content":
+                             "Those tool results were already returned. Finish with a JSON "
+                             "answer using available evidence, or set insufficient=true."})
     return Answer("Tool-call limit reached. Evidence below may be incomplete.",
                   _verified_sources(conn,citations),trace)
 
@@ -979,10 +1068,25 @@ def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8,
         )
     if not conn.execute("SELECT 1 FROM documents WHERE status='ready' LIMIT 1").fetchone():
         return Answer("No readable documents are indexed. Ingest a folder first.", [], [])
+    indexed = [(row["path"], row["kind"]) for row in conn.execute(
+        "SELECT path,kind FROM documents WHERE status='ready' ORDER BY path")]
+    paths = [path for path, _ in indexed]
+    named, _ = _explicit_files(question, paths)
+    if not named:
+        kind = ("contract" if re.search(r"(?i)\b(?:the|this)\s+contract\b", question)
+                else "boq" if re.search(r"(?i)\b(?:the|this)\s+boq\b", question)
+                else "")
+        candidates = [path for path, doc_kind in indexed
+                      if kind and kind in path.casefold()
+                      and (kind != "contract" or doc_kind in {"pdf", "docx"})]
+        if len(candidates) > 1:
+            return Answer("Please name the document you mean: " +
+                          ", ".join(candidates) + ".", [], [])
     chosen_provider = (provider if provider is not None else
                        os.getenv("LLM_PROVIDER", "gemini")).strip().lower()
     if model is not None and not model.strip():
         raise ValueError("Model ID cannot be empty.")
+    max_rounds = min(max(int(max_rounds), 1), 6)
     if chosen_provider == "gemini":
         answer = _ask_gemini(conn, question, max_rounds, model_override=model)
     elif chosen_provider in ("openai", "groq", "ollama_cloud", "compatible"):

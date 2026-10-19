@@ -118,7 +118,11 @@ def _records(conn: sqlite3.Connection, file: str, sheet: str) -> Iterator[dict[s
         yield {"file": record["path"], "table": record["sheet"], "row": record["row_num"],
                "kind": "excel", "cells": json.loads(record["cells_json"])}
     sql = ("SELECT d.path,p.page,p.table_num,p.row_num,p.cells_json,p.method "
-           "FROM pdf_boq_rows p JOIN documents d ON d.id=p.document_id WHERE d.status='ready'")
+           "FROM pdf_boq_rows p JOIN documents d ON d.id=p.document_id WHERE d.status='ready' "
+           "AND (p.method!='text_lines' OR lower(d.path) LIKE '%boq%' OR EXISTS "
+           "(SELECT 1 FROM passages s WHERE s.document_id=d.id AND "
+           "(lower(s.text) LIKE '%bill of quantities%' OR "
+           "lower(s.text) LIKE '%schedule of rates%')))")
     params = []
     if file:
         sql += " AND d.path=?"
@@ -201,6 +205,7 @@ def query_spreadsheet(
     unknown_cells: list[str] = []
     unknown_count = total = 0
     sums: dict[str, Decimal] = {}
+    sums_by_file: dict[str, dict[str, Decimal]] = {}
     top_matches: list[dict[str, Any]] = []
     current: tuple[str, str] | None = None
     pending: list[dict[str, Any]] = []
@@ -261,6 +266,8 @@ def query_spreadsheet(
             return
         total += 1
         sums[code] = sums.get(code, Decimal(0)) + amount
+        file_sums = sums_by_file.setdefault(row["file"], {})
+        file_sums[code] = file_sums.get(code, Decimal(0)) + amount
         item = {"amount": float(amount), "amount_exact": str(amount),
                 "row": row["row"], "currency": code,
                 "values": {col: entry.get("value") for col, entry in row["cells"].items()},
@@ -343,10 +350,10 @@ def query_spreadsheet(
         choose_pending()
     missing_pdf = ("SELECT d.path FROM documents d WHERE d.kind='pdf' AND d.status='ready' "
                    "AND NOT EXISTS (SELECT 1 FROM pdf_boq_rows p WHERE p.document_id=d.id) "
-                   "AND EXISTS (SELECT 1 FROM passages s WHERE s.document_id=d.id AND "
-                   "(lower(d.path) LIKE '%boq%' OR lower(s.text) LIKE '%boq%' OR "
-                   "lower(s.text) LIKE '%amount%' OR "
-                   "lower(s.text) LIKE '%price%' OR lower(s.text) LIKE '%cost%'))")
+                   "AND (lower(d.path) LIKE '%boq%' OR EXISTS "
+                   "(SELECT 1 FROM passages s WHERE s.document_id=d.id AND "
+                   "(lower(s.text) LIKE '%bill of quantities%' OR "
+                   "lower(s.text) LIKE '%schedule of rates%')))")
     for missing in conn.execute(missing_pdf):
         if not file or file == missing["path"]:
             warn(f"{missing['path']}: numeric PDF content has no reliable BOQ table; results incomplete")
@@ -360,6 +367,9 @@ def query_spreadsheet(
             "offset": offset, "has_more": offset + limit < total,
             "matched_amount_sum": str(next(iter(sums.values()))) if len(sums) == 1 else None,
             "matched_amount_sums": {code: str(amount) for code, amount in sorted(sums.items())},
+            "matched_amount_sums_by_file": {
+                path: {code: str(amount) for code, amount in sorted(file_sums.items())}
+                for path, file_sums in sorted(sums_by_file.items())},
             "inspected_columns": inspected, "unknown_amount_rows": unknown_count,
             "unknown_amount_cells": unknown_cells, "incomplete": bool(warnings or unknown_count),
             "warnings": warnings}

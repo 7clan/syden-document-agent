@@ -41,11 +41,20 @@ STATUS_WORDS = set().union(*STATUS_GROUPS)
 PREDICATE = re.compile(r"\b(?:is|are|was|were|has|have|had|did|does|shall|must|will|"
                        r"remains?|due|" + "|".join(sorted(STATUS_WORDS)) + r")\b",
                        re.IGNORECASE)
+_DASHES = str.maketrans({char: "-" for char in "‐‑‒–—−"})
+
+
+def _ascii_dashes(text: str) -> str:
+    return text.translate(_DASHES)
+
+
+def _without_identifiers(text: str) -> str:
+    return IDENTIFIER.sub(" ", _ascii_dashes(text))
 
 
 def normalize(text: str) -> str:
     """Accept PDF line wrapping and harmless Unicode/whitespace differences."""
-    text = unicodedata.normalize("NFKC", text).casefold()
+    text = _ascii_dashes(unicodedata.normalize("NFKC", text)).casefold()
     text = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", text)
     return " ".join(text.split())
 
@@ -129,8 +138,7 @@ def _clauses(text: str) -> list[str]:
 
 
 def _identifiers(text: str) -> set[str]:
-    return {item.upper().replace("–", "-").replace("—", "-")
-            for item in IDENTIFIER.findall(text)}
+    return {item.upper() for item in IDENTIFIER.findall(_ascii_dashes(text))}
 
 
 def _anchor_terms(text: str) -> set[str]:
@@ -167,14 +175,9 @@ def _relevant_clauses(claim: str, quotes: list[str]) -> list[str]:
     return clauses if identifiers else []
 
 
-def _facts(text: str) -> tuple[frozenset[str], frozenset[Decimal], int | None, bool]:
-    dates, rest = _date_values(text)
-    return frozenset(dates), frozenset(numbers(rest)), _status(text), bool(NEGATION.search(text))
-
-
 def _relation_terms(text: str) -> set[str]:
     _, rest = _date_values(text)
-    rest = IDENTIFIER.sub(" ", rest)
+    rest = _without_identifiers(rest)
     rest = NUMBER.sub(" ", rest)
     return _anchor_terms(rest)
 
@@ -205,23 +208,27 @@ def _external_conflict(conn: sqlite3.Connection, claim: str,
         return None
     status = _status(claim)
     claim_dates, claim_rest = _date_values(claim)
-    claim_numbers = numbers(IDENTIFIER.sub(" ", claim_rest))
+    claim_numbers = numbers(_without_identifiers(claim_rest))
     relation = _relation_terms(claim)
     for citation in sorted(observed):
         for clause in _clauses(_evidence_text(get_evidence(conn, citation))):
             if not identifiers <= _identifiers(clause):
                 continue
             other_relation = _relation_terms(clause)
-            shared = relation & other_relation
-            comparable = (not relation or not other_relation or len(shared) >= 2
-                          or (len(relation) == 1 and relation == other_relation))
+            # Only comparable property wording supports a cross-source fact
+            # conflict. A shared record ID and generic "change order" words do
+            # not make a cable quantity comparable to a revised contract sum.
+            comparable = (bool(relation and other_relation)
+                          and (relation <= other_relation or other_relation <= relation))
+            if status is not None and (not relation or not other_relation):
+                comparable = True
             if not comparable:
                 continue
             other_status = _status(clause)
             if status is not None and other_status is not None and other_status != status:
                 return f"Conflicting retrieved source for the same identifier: {citation}"
             other_dates, other_rest = _date_values(clause)
-            other_numbers = numbers(IDENTIFIER.sub(" ", other_rest))
+            other_numbers = numbers(_without_identifiers(other_rest))
             if ((claim_dates and other_dates and not claim_dates <= other_dates)
                     or (claim_numbers and other_numbers and not claim_numbers <= other_numbers)):
                 return f"Conflicting retrieved source for the same identifier: {citation}"
@@ -255,120 +262,237 @@ def _explicit_files(question: str, paths: list[str]) -> tuple[set[str], bool]:
     return {path for _, _, documents in matches for path in documents}, unknown
 
 
+def question_parts(question: str) -> list[str]:
+    """Preserve separately asked questions so a filename scopes only its part."""
+    parts = re.split(
+        r"(?i)[?;]+|,\s*(?=(?:what|which|how|when|where|who)\b)|"
+        r"\s+and\s+(?=(?:what|which|how|when|where|who)\b)", question)
+    cleaned = [part.strip(" ,.?;\n") for part in parts if part.strip(" ,.?;\n")]
+    if (len(cleaned) > 1 and re.match(r"(?i)^(?:according to|from|in)\b", cleaned[0])
+            and not re.search(r"(?i)\b(?:what|which|how|when|where|who)\b", cleaned[0])):
+        cleaned[1] = cleaned[0] + ", " + cleaned[1]
+        cleaned.pop(0)
+    return cleaned or [question]
+
+
+def _scope_allows(question: str, paths: list[str], filename: str,
+                  part_index: int | None) -> bool:
+    parts = question_parts(question)
+    inherited: set[str] = set()
+    if re.match(r"(?i)^according to\b", question):
+        inherited, _ = _explicit_files(parts[0], paths)
+    if part_index is not None:
+        if not 0 <= part_index < len(parts):
+            return False
+        parts = [parts[part_index]]
+    for part in parts:
+        named, unknown = _explicit_files(part, paths)
+        if not named and inherited:
+            named = inherited
+        if not unknown and (not named or filename in named):
+            return True
+    return False
+
+
+def _source_span(source: str, quote: str) -> tuple[int, int] | None:
+    """Map normalized PDF line wraps back to offsets in indexed source text."""
+    folded: list[str] = []
+    offsets: list[int] = []
+    index = 0
+    while index < len(source):
+        wrapped = re.match(r"-\s*\n\s*", source[index:])
+        if (wrapped and index and source[index - 1].isalnum()
+                and index + wrapped.end() < len(source)
+                and source[index + wrapped.end()].isalnum()):
+            index += wrapped.end()
+            continue
+        for char in _ascii_dashes(unicodedata.normalize(
+                "NFKC", source[index])).casefold():
+            if char.isspace():
+                if folded and folded[-1] != " ":
+                    folded.append(" ")
+                    offsets.append(index)
+            else:
+                folded.append(char)
+                offsets.append(index)
+        index += 1
+    needle = normalize(quote)
+    found = "".join(folded).find(needle)
+    if found < 0:
+        return None
+    return offsets[found], offsets[found + len(needle) - 1] + 1
+
+
+def _select_local_span(source: str, claim: str) -> tuple[int, int] | None:
+    """Locate source text for a citation-only support; matching is not a truth verdict."""
+    claim_terms = _anchor_terms(claim)
+    claim_ids = _identifiers(claim)
+    claim_dates, without_dates = _date_values(claim)
+    claim_values = numbers(_without_identifiers(without_dates))
+    candidates = []
+    for match in re.finditer(r"[^\n.!?;]+(?:[.!?;]|$)", source):
+        piece = match.group().strip()
+        dates, rest = _date_values(piece)
+        if (claim_ids and not claim_ids <= _identifiers(piece)) or (
+            claim_dates and not claim_dates <= dates) or (
+            claim_values and not claim_values <= numbers(_without_identifiers(rest))):
+            continue
+        score = len(claim_terms & _anchor_terms(piece))
+        if score:
+            candidates.append((score, -match.start(), match.start(), match.end()))
+    if not candidates:
+        return None
+    _, _, start, end = max(candidates)
+    return start, end
+
+
+def _direct_conflict(claim: str, source: str) -> str | None:
+    """Reject only comparable explicit facts; never use a clause to prove prose."""
+    relevant = _relevant_clauses(claim, [source])
+    if not relevant:
+        return None
+    if ((_status(claim) is not None or bool(NEGATION.search(claim)) or any(
+            NEGATION.search(clause) for clause in relevant))
+            and (_status(claim) is None or any(
+                _status(clause) is not None for clause in relevant))):
+        conflict = _contradiction(claim, relevant)
+        if conflict:
+            return "Explicit conflicting fact: " + conflict
+    claim_dates, rest = _date_values(claim)
+    claim_values = numbers(_without_identifiers(rest))
+    source_dates, source_rest = _date_values(" ".join(relevant))
+    source_values = numbers(_without_identifiers(source_rest))
+    if claim_dates and source_dates and not claim_dates <= source_dates:
+        return "Explicit date conflicts with the relevant source assertion"
+    if claim_values and source_values and not claim_values <= source_values:
+        return "Explicit amount or quantity conflicts with the relevant source assertion"
+    return None
+
+
+def _resolve_supports(conn: sqlite3.Connection, claim: str, supports: list[Any],
+                      allowed: set[str], question: str, paths: list[str],
+                      part: int | None) -> tuple[list[str], list[dict[str, Any]], list[str], str]:
+    """Authenticate citations and return spans cut from the local index."""
+    citations: list[str] = []
+    excerpts: list[dict[str, Any]] = []
+    full_sources: list[str] = []
+    for support in supports:
+        if not isinstance(support, dict):
+            return citations, excerpts, full_sources, "Malformed source reference"
+        citation, quote = support.get("citation"), support.get("quote", "")
+        if (not isinstance(citation, str) or citation not in allowed
+                or citation.endswith(" | document") or not isinstance(quote, str)
+                or len(quote) > 1200 or not _scope_allows(
+                    question, paths, citation.split(" | ")[0], part)):
+            return citations, excerpts, full_sources, (
+                "Source was not retrieved or is outside the question part")
+        source = _evidence_text(get_evidence(conn, citation))
+        if not source:
+            return citations, excerpts, full_sources, "Cited source is missing from the index"
+        span = _source_span(source, quote) if quote else _select_local_span(source, claim)
+        if span is None:
+            return citations, excerpts, full_sources, (
+                "Quotation does not occur at the cited source" if quote else
+                "No local source span matches the claim")
+        start, end = span
+        citations.append(citation)
+        full_sources.append(source)
+        excerpts.append({"citation": citation, "quote": source[start:end],
+                         "start": start, "end": end})
+    return citations, excerpts, full_sources, ""
+
+
+def _check_comparable_facts(conn: sqlite3.Connection, claim: str,
+                            excerpts: list[dict[str, Any]], full_sources: list[str],
+                            allowed: set[str]) -> str:
+    """Reject checkable discrepancies; do not certify semantic entailment."""
+    combined = " ".join(item["quote"] for item in excerpts)
+    whole = " ".join(full_sources)
+    claim_dates, without_dates = _date_values(claim)
+    source_dates, source_without_dates = _date_values(combined)
+    claim_numbers = numbers(_without_identifiers(without_dates))
+    source_numbers = numbers(_without_identifiers(source_without_dates))
+    if not claim_dates <= source_dates:
+        return "Date is absent or differs from supporting span"
+    if not claim_numbers <= source_numbers:
+        return "Quantity or amount is absent from supporting span"
+    if not _identifiers(claim) <= _identifiers(combined):
+        return "Identifier is absent from supporting span"
+    def currencies(value: str) -> set[str]:
+        return {code.upper() for code in re.findall(
+            r"\b(?:SAR|AED|USD|EUR|GBP)\b", value, re.IGNORECASE)}
+    if not currencies(claim) <= currencies(combined):
+        return "Currency is absent from supporting span"
+    # This is only a relevance floor. Shared words do not establish a relation.
+    if not _identifiers(claim) and len(
+            _anchor_terms(claim) & _anchor_terms(normalize(combined))) < (
+                1 if claim_dates or claim_numbers or _status(claim) is not None else 2):
+        return "Source span has no identifiable subject in common with claim"
+    conflict = _direct_conflict(claim, combined)
+    if conflict:
+        return conflict
+    if _status(claim) is not None:
+        status_clauses = [piece for piece in _clauses(whole)
+                          if (_status(piece) == _status(claim)
+                              and (not _identifiers(claim)
+                                   or _identifiers(claim) <= _identifiers(piece)))]
+        if not status_clauses:
+            return "Decision status is absent from cited source"
+    return _external_conflict(conn, claim, allowed) or ""
+
+
 def validate_claims(conn: sqlite3.Connection, raw: str,
                     observed_citations: list[str], question: str = "") -> dict[str, Any]:
-    """Return claim-level statuses using only retrieved, locally indexed evidence."""
+    """Authenticate local support; reserve certainty for exact text or calculations.
+
+    The model interprets prose. Local checks establish provenance and explicit
+    comparable facts, but an authentic excerpt does not prove its interpretation.
+    """
     payload = parse_answer(raw)
     if payload is None:
         return {"status": "unverified", "claims": [], "sources": [],
                 "answer": "Structured answer unavailable. Inspect the retrieved sources below.",
                 "reason": "Malformed or missing structured answer"}
     allowed = set(observed_citations)
-    named_files, unknown_file = _explicit_files(
-        question, [row["path"] for row in conn.execute("SELECT path FROM documents")])
-    if unknown_file:
-        allowed = set()
-    elif named_files:
-        allowed = {cite for cite in allowed if cite.split(" | ")[0] in named_files}
+    paths = [row["path"] for row in conn.execute("SELECT path FROM documents")]
     results: list[dict[str, Any]] = []
     for entry in payload["claims"]:
         if not isinstance(entry, dict):
             results.append({"text": "", "status": "unverified", "sources": [], "quotes": [],
                             "reason": "Malformed claim"})
             continue
-        claim = entry.get("text")
-        supports = entry.get("supports")
+        claim, supports = entry.get("text"), entry.get("supports")
         if (not isinstance(claim, str) or not 1 <= len(claim) <= 1000
                 or not isinstance(supports, list) or not 1 <= len(supports) <= 8):
             results.append({"text": str(claim or "")[:1000], "status": "unverified",
-                            "sources": [], "quotes": [],
-                            "reason": "Missing claim text or source quotation"})
+                            "sources": [], "quotes": [], "reason": "Missing claim or support"})
             continue
-        citations: list[str] = []
-        quotes: list[str] = []
-        reason = ""
-        for support in supports:
-            if not isinstance(support, dict):
-                reason = "Malformed source reference"
-                break
-            citation, quote = support.get("citation"), support.get("quote")
-            if (not isinstance(citation, str) or citation not in allowed
-                    or citation.endswith(" | document")
-                    or not isinstance(quote, str) or not 4 <= len(quote) <= 1200):
-                reason = "Source was not retrieved or quotation is missing"
-                break
-            evidence = _evidence_text(get_evidence(conn, citation))
-            if not evidence or normalize(quote) not in normalize(evidence):
-                reason = "Quotation does not occur at the cited source"
-                break
-            citations.append(citation)
-            quotes.append(quote)
-        if not reason:
-            clauses = _relevant_clauses(claim, quotes)
-            exact = any(normalize(claim) in normalize(quote) for quote in quotes)
-            if not clauses and not exact:
-                reason = "No source clause ties the claimed entity or action to its evidence"
-            elif not clauses:
-                clauses = quotes
-        if not reason:
-            # Values from other clauses must not rescue a wrong entity association.
-            # A coordinated clause with several different values is uncertain
-            # unless the claim repeats exact source wording or names every value.
-            signatures = {_facts(clause) for clause in clauses}
-            claim_dates, claim_without_dates = _date_values(claim)
-            claim_numbers = numbers(claim_without_dates)
-            if not exact and len(signatures) > 1 and (claim_dates or claim_numbers
-                                                       or _status(claim) is not None):
-                reason = "Conflicting facts among relevant source clauses; association is uncertain"
-            elif not exact and len(clauses) == 1:
-                source_dates, source_rest = _date_values(clauses[0])
-                source_numbers = numbers(source_rest)
-                if ((claim_dates and len(source_dates) > 1 and source_dates - claim_dates)
-                        or (claim_numbers and len(source_numbers) > 1
-                            and source_numbers - claim_numbers)):
-                    reason = "Several values share one source clause; association is uncertain"
-            if (not reason and not exact and not claim_dates and not claim_numbers
-                    and _status(claim) is None
-                    and max((len(_anchor_terms(claim) & _anchor_terms(clause))
-                             for clause in clauses), default=0) < 2):
-                reason = "Quote does not establish the claimed action or relationship"
-        if not reason:
-            combined = " ".join(clauses)
-            claim_dates, claim_without_dates = _date_values(claim)
-            source_dates, source_without_dates = _date_values(combined)
-            if not claim_dates.issubset(source_dates):
-                reason = "Date is absent or differs from supporting quote"
-            elif not numbers(claim_without_dates).issubset(numbers(source_without_dates)):
-                reason = "Quantity, amount, or date number is absent from supporting quote"
-            elif not {code.upper() for code in re.findall(
-                    r"\b(?:SAR|AED|USD|EUR|GBP)\b", claim, re.IGNORECASE)}.issubset(
-                    {code.upper() for code in re.findall(
-                        r"\b(?:SAR|AED|USD|EUR|GBP)\b", combined, re.IGNORECASE)}):
-                reason = "Currency is absent from supporting quote"
-            elif not _identifiers(claim).issubset(_identifiers(combined)):
-                reason = "Identifier is absent from supporting quote"
-            else:
-                reason = _contradiction(claim, clauses) or ""
+        part = entry.get("question_part")
+        if part is not None and (isinstance(part, bool) or not isinstance(part, int)):
+            reason = "Invalid question part"
+            citations: list[str] = []
+            excerpts: list[dict[str, Any]] = []
+        else:
+            citations, excerpts, full_sources, reason = _resolve_supports(
+                conn, claim, supports, allowed, question, paths, part)
             if not reason:
-                reason = _external_conflict(conn, claim, allowed) or ""
+                reason = _check_comparable_facts(
+                    conn, claim, excerpts, full_sources, allowed)
+        exact = not reason and any(normalize(claim) in normalize(item["quote"])
+                                   for item in excerpts)
         status = ("unverified" if reason else
                   "deterministically_verified" if exact else "evidence_linked")
         results.append({"text": claim, "status": status,
                         "sources": list(dict.fromkeys(citations)) if not reason else [],
-                        "quotes": ([{"citation": cite, "quote": quote}
-                                    for cite, quote in zip(citations, quotes, strict=True)]
-                                   if not reason else []),
-                        "reason": reason or ("Exact source wording" if
-                                           status == "deterministically_verified" else
-                                           "Interpretation is not independently proven")})
+                        "quotes": excerpts if not reason else [],
+                        "reason": reason or ("Exact source wording" if exact else
+                                             "Interpretation is not independently proven")})
     accepted = [item for item in results if item["status"] != "unverified"]
     rejected = [item for item in results if item["status"] == "unverified"]
     sources = list(dict.fromkeys(cite for item in accepted for cite in item["sources"]))
-    if payload["insufficient"] or not accepted:
-        rendered = "Insufficient verified evidence to answer."
-    else:
-        rendered = "\n".join(f"- {item['text']} — {', '.join(item['sources'])}"
-                             for item in accepted)
+    rendered = ("Insufficient verified evidence to answer." if payload["insufficient"] or
+                not accepted else "\n".join(
+                    f"- {item['text']} — {', '.join(item['sources'])}" for item in accepted))
     if rejected:
         rendered += f"\n\n{len(rejected)} unsupported claim(s) omitted."
     status = ("unverified" if rejected or not accepted or payload["insufficient"] else

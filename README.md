@@ -103,19 +103,20 @@ basename but different extensions are managed independently.
 
 ### General-purpose evidence verification
 
-The tool-calling model returns a JSON answer with individual claims and an
-exact source quotation for each claim. Python checks that each citation was
-retrieved, resolves at the local index, and contains the quote. It also checks
-comparable numbers (including simple written counts), currencies, identifiers,
-dates expressed with numbers, and explicit decision or negation conflicts.
-For prose with several facts, it compares a claim to the relevant clause or
-clearly separated record. Conflicting values, multiple possible associations,
-or a quotation that shares only a subject noun are marked unverified. A
-negation in an unrelated clause does not invalidate the claim. If a question
-names a file, its full filename is matched case-insensitively, including spaces,
-underscores and hyphens; multiple named files can contribute evidence.
-An explicitly named file absent from the index cannot be replaced by evidence
-from another file.
+The tool-calling model returns a JSON answer with individual claims and source
+citations. A support may contain an exact quote or an empty quote. Python
+resolves the citation against the local index, authenticates a supplied quote,
+or selects a local source span when the quote is empty. Claim audit records
+include the indexed excerpt and character offsets. Python checks explicit
+numbers, dates, currencies, identifiers, and directly comparable conflicting
+facts. These checks establish provenance and detect some errors; they cannot
+prove arbitrary natural-language interpretations.
+
+Each claim identifies the numbered part of the question it answers. A filename
+constrains that part, while another part can use evidence from another file.
+For a singular ambiguous request such as “the contract” when multiple contract
+files are indexed, the app asks for a filename. Cross-workbook BOQ answers show
+per-file subtotals and exact cells; currencies are never converted or mixed.
 The displayed answer is assembled from the claims that pass these checks;
 unsupported claims are omitted and counted. Malformed JSON falls back to
 retrieved source excerpts, clearly labeled unverified.
@@ -125,7 +126,7 @@ recorded but the UI renders the individually checked claims):
 
 ```json
 {"answer":"Four circuits passed; two need retesting.","insufficient":false,
- "claims":[{"text":"Four circuits passed.","supports":[
+ "claims":[{"text":"Four circuits passed.","question_part":0,"supports":[
    {"citation":"Report.pdf | page 1 | chunk 0",
     "quote":"Four circuits passed and two circuits require retesting."}]}]}
 ```
@@ -133,14 +134,15 @@ recorded but the UI renders the individually checked claims):
 The UI distinguishes **deterministically verified** exact source wording or
 Python BOQ calculations, **evidence-linked** paraphrases whose interpretation
 Python cannot prove, and **unverified** missing or contradictory support.
-An authentic quote does not make its interpretation true. For example, a
-changed quantity or an approved-versus-proposed claim can be rejected, but
-some subtle semantic errors may remain evidence-linked and need human review.
-Clause boundaries and word-based subject matching are conservative heuristics:
-unusual grammar may cause a supported paraphrase to be omitted, and a plausible
-evidence-linked interpretation is not a proof of the relationship it asserts.
-Tool failures, truncation, and partially indexed files are shown as coverage
-limits. No second model call is made solely to verify a draft answer.
+An authentic quote does not make its interpretation true. Changed amounts and
+explicit conflicting decisions can be rejected, but a role reversal using the
+same words may still be evidence-linked and needs human review. Python marks
+only exact source wording and deterministic calculations as verified. A
+truncated search is a coverage warning for exhaustive questions; a successful
+retry clears an earlier tool error. Unreadable files remain visible as coverage
+limits. Repeated tool calls are cached and bounded. No second model call is
+made solely to verify a draft answer; a provider emitting invalid JSON may
+receive one format-only generation retry.
 
 OpenAI Chat Completions uses a strict JSON schema for the response. If that
 format is rejected by the chosen OpenAI model, the generation request is
@@ -149,6 +151,10 @@ Gemini, Groq, Ollama Cloud and other compatible endpoints use the same instructe
 contract with local schema and provenance checks; model support varies. The
 old `semantic_verifier.py` is retained for experimental tests and is not in the
 active provider request path.
+Ollama states that its cloud API currently lacks enforced structured outputs
+([official documentation](https://docs.ollama.com/capabilities/structured-outputs)).
+Malformed cloud JSON can therefore still occur; the app retries answer
+generation once, then shows indexed excerpts as unverified if parsing fails.
 
 ### Choose a provider and model in Streamlit
 
@@ -250,6 +256,9 @@ smoke tests also passed on synthetic text after the audit fixes.
 After the evidence-first refactor on 2026-10-20, the local suite passed 159
 tests with 1 skipped, and Ruff passed. The pull request's GitHub Actions result
 should be checked separately.
+After the scoped provenance correction on 2026-10-20, the local suite passed
+**184 tests with 1 skipped**, and Ruff passed. The tested live scenarios and
+the remaining provider limits are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
 ### Observed provider checks (2026-10-19)
 
