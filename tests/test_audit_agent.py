@@ -617,6 +617,7 @@ def test_ollama_nested_scope_bullets_are_verified_individually():
     answer = _final_answer(
         conn, response, [citation], [{"name": "get_evidence", "ok": True}],
         "Summarize the scope of work, including exclusions.",
+        provider="ollama_cloud",
     )
     assert answer.text == response
     assert answer.sources == [citation]
@@ -648,7 +649,35 @@ def test_ollama_nested_bullets_reject_invented_or_reversed_claims():
         answer = _final_answer(
             conn, variant, [citation], [{"name": "get_evidence", "ok": True}],
             "Summarize the scope of work, including exclusions.",
+            provider="ollama_cloud",
         )
         assert "Verified source excerpts" in answer.text
         assert variant not in answer.text
+    conn.close()
+
+
+
+def test_provider_specific_outline_normalization_does_not_change_gemini():
+    """Provider boundary: Ollama-only normalization cannot relax Gemini rules."""
+    conn, cite = _contract_evidence()
+    generated = (
+        "**Scope of Work (as documented in *Contract.pdf*, page 1)**\n"
+        "- **Primary tasks**:\n"
+        "  - Install two transformers.\n"
+        "  - Commission the plant.\n"
+        "- **Exclusions**:\n"
+        "  - Civil excavation is excluded from this contract.\n"
+    )
+    ollama = _final_answer(
+        conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.", provider="ollama_cloud",
+    )
+    gemini = _final_answer(
+        conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.", provider="gemini",
+    )
+    assert ollama.text == generated
+    assert gemini.text.startswith("**Verified source excerpts")
+    assert ollama.sources == [cite]
+    assert gemini.sources == [cite]
     conn.close()
