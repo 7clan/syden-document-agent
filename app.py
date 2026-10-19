@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from syden_agent.agent import ask
 from syden_agent.db import connect
+from syden_agent.file_manager import folder_files, remove_document
 from syden_agent.ingest import ingest_folder
 from syden_agent.tools import extract_dates, list_documents, query_spreadsheet
 from syden_agent.ui_format import display_safe_rows
@@ -146,13 +147,83 @@ with st.sidebar:
             st.error(error)
     if "index_report" in st.session_state:
         st.json(st.session_state["index_report"], expanded=False)
-    st.subheader("Indexed files")
-    document_status = list_documents(conn)
-    failed = [doc for doc in document_status["documents"]
-              if doc["status"] != "ready" or doc["error"]]
-    if failed:
-        st.warning(f"Coverage incomplete: {len(failed)} file(s) failed or have unreadable pages.")
-    st.json(document_status, expanded=False)
+    st.subheader("Current documents")
+    active_folder = conn.execute(
+        "SELECT value FROM metadata WHERE key='active_folder'"
+    ).fetchone()
+    folder_is_indexed = bool(active_folder and
+                             Path(active_folder["value"]).resolve() == target_folder)
+    disk_files = folder_files(target_folder)
+    indexed = list_documents(conn) if folder_is_indexed else {"documents": [], "count": 0}
+    statuses = {doc["path"]: doc for doc in indexed["documents"]}
+    st.caption(f"{len(disk_files)} file(s) in the selected folder; "
+               f"{sum(statuses.get(name, {}).get('status') == 'ready' for name in disk_files)} ready.")
+    if not folder_is_indexed:
+        st.info("This folder isn't the active index yet. Click Index folder to use its documents.")
+    if not disk_files:
+        st.info("No supported documents in this folder. Select files above to add them.")
+    else:
+        with st.container(height=225, border=True):
+            for name in disk_files:
+                extension = Path(name).suffix.lower()
+                symbol = ("📕" if extension == ".pdf" else "📘" if extension == ".docx"
+                          else "📗")
+                status = statuses.get(name, {}).get("status", "not indexed")
+                st.markdown(f"{symbol} **{name}** · {status}")
+        failed = [doc for doc in indexed["documents"]
+                  if doc["status"] != "ready" or doc["error"]]
+        if failed:
+            st.warning(f"Coverage incomplete: {len(failed)} file(s) failed or have warnings.")
+        with st.expander("Remove or delete a document", expanded=False):
+            managed_file = st.selectbox(
+                "Choose a file",
+                options=disk_files,
+                index=None,
+                placeholder="Select a document",
+                key=f"manage_file_{str(target_folder)}",
+            )
+            action = st.radio(
+                "What should happen to it?",
+                ["Remove from AI (keep an archived copy)", "Permanently delete file"],
+                key="manage_file_action",
+            )
+            if action.startswith("Remove"):
+                st.caption("Moves the file outside the indexed folder so it won't "
+                           "return when you index again. The copy can be restored later.")
+            else:
+                st.warning("Permanent deletion removes the file from disk, not just the AI.")
+            agree = st.checkbox(
+                f"I confirm this action for {managed_file}" if managed_file
+                else "Select a document to confirm its removal",
+                value=False,
+                key=f"confirm_manage_{managed_file}_{action}",
+                disabled=managed_file is None,
+            )
+            if st.button("Confirm document removal",
+                         disabled=not (managed_file and agree),
+                         use_container_width=True):
+                try:
+                    archived = remove_document(
+                        target_folder, managed_file,
+                        delete_permanently=action.startswith("Permanently"),
+                    )
+                except (OSError, ValueError) as exc:
+                    st.error(f"Could not manage document: {exc}")
+                else:
+                    with st.spinner("Refreshing the document index..."):
+                        st.session_state["index_report"] = ingest_folder(conn, folder)
+                    st.session_state.pop("last_answer", None)
+                    st.session_state.pop("csv_export", None)
+                    st.session_state["manage_feedback"] = (
+                        f"Removed {managed_file} from the AI; saved copy: {archived}"
+                        if archived else f"Permanently deleted {managed_file}."
+                    )
+                    st.rerun()
+    message = st.session_state.pop("manage_feedback", None)
+    if message:
+        st.success(message)
+    with st.expander("Index details and diagnostics", expanded=False):
+        st.json(indexed, expanded=False)
 
 question = st.text_area("Ask a question about the indexed documents",
                         placeholder="List all total cost items above SAR 1 million across the BOQs")
