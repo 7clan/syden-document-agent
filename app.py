@@ -72,16 +72,15 @@ with st.sidebar:
             st.session_state["index_report"] = ingest_folder(conn, folder)
             st.session_state.pop("last_answer", None)
             st.session_state.pop("csv_export", None)
-    st.caption("Add downloaded files without moving them manually:")
+    st.caption(f"Add files here to: {Path(folder).expanduser().resolve()}")
     revision = st.session_state.get("_document_upload_revision", 0)
     selected_files = st.file_uploader(
-        "Choose PDF, Excel, or Word files",
+        "Select one or more PDF, Excel, or Word files",
         type=["pdf", "xlsx", "xlsm", "xls", "docx"],
         accept_multiple_files=True,
         key=f"document_upload_{revision}",
     )
-    if st.button("Add selected files and index", disabled=not selected_files,
-                 use_container_width=True):
+    if selected_files:
         added: list[str] = []
         errors: list[str] = []
         max_bytes = int(os.getenv("SYDEN_MAX_FILE_MB", "100")) * 1024 * 1024
@@ -98,15 +97,23 @@ with st.sidebar:
                 st.session_state["index_report"] = ingest_folder(conn, folder)
                 st.session_state.pop("last_answer", None)
                 st.session_state.pop("csv_export", None)
-                # Clear the file chooser so the same selection is not added again.
-                st.session_state["_document_upload_revision"] = revision + 1
-        if added:
-            st.success(f"Saved {len(added)} file(s) to {Path(folder).expanduser().resolve()}: "
-                       + ", ".join(added))
+        st.session_state["upload_feedback"] = {
+            "added": added,
+            "errors": errors,
+            "folder": str(Path(folder).expanduser().resolve()),
+        }
+        # Clear the chooser before the next rerun to avoid repeated uploads.
+        st.session_state["_document_upload_revision"] = revision + 1
+        st.rerun()
+    feedback = st.session_state.pop("upload_feedback", None)
+    if feedback:
+        if feedback["added"]:
+            st.success(f"Added and indexed {len(feedback['added'])} file(s) in "
+                       f"{feedback['folder']}: " + ", ".join(feedback["added"]))
             report = st.session_state["index_report"]
             if report.get("failed") or report.get("error"):
                 st.warning("Some documents could not be indexed; inspect the report below.")
-        for error in errors:
+        for error in feedback["errors"]:
             st.error(error)
     if "index_report" in st.session_state:
         st.json(st.session_state["index_report"], expanded=False)
