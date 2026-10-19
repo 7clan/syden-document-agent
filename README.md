@@ -52,6 +52,26 @@ syden-agent smoke  # tests real provider function calling with synthetic, noncon
 python -m streamlit run app.py
 ```
 
+### Choose a provider and model in Streamlit
+
+The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
+**Model** dropdown. You can switch between Gemini, Groq, Ollama Cloud, OpenAI, or a
+custom OpenAI Chat Completions-compatible service without restarting the app.
+The model dropdown offers the model configured in your local `.env`, a documented
+default to try (availability depends on your account), and **Other model ID**
+for an exact model name. Switching providers/models clears the previous response.
+The selected provider/model are passed to each question; the app does not rewrite
+environment variables or disclose your API keys.
+
+Add the corresponding `*_API_KEY` (and a compatible base URL, where required)
+to your local `.env` before selecting a provider. A provider without its key
+is shown but the **Ask agent** button remains disabled. For Groq, Ollama Cloud,
+OpenAI and other compatible APIs, install the optional client:
+`python -m pip install -e ".[openai,dev]"`.
+The Streamlit sidebar reflects configured model IDs, but it cannot guarantee
+that a particular account can call them. Test real function calling using
+`syden-agent smoke --provider <provider>` or a real question.
+
 For OpenAI as provider, install `pip install -e ".[openai,dev]"`, set `LLM_PROVIDER=openai`
 and `OPENAI_API_KEY` in `.env`.
 
@@ -204,7 +224,7 @@ offline test. Inspect the archive yourself before sharing it; this command does 
 
 ## Publish to GitHub (when ready)
 
-The repository is provided locally as a starter; it has **not** been created on GitHub.
+The active GitHub repository is [7clan/syden-document-agent](https://github.com/7clan/syden-document-agent).
 Review the code and keep documents and credentials out of commits. Create an empty GitHub repository
 named `syden-document-agent` at https://github.com/new (choose visibility appropriately and do
 not initialize it with a second README), then run in the extracted project directory:
