@@ -107,14 +107,14 @@ def test_qa_pass_counts_visible_in_relevant_fallback():
     )
     conn.execute(
         "INSERT INTO passages(document_id,page,chunk,text) VALUES(1,1,0,?)",
-        ("QUALITY INSPECTION RECORD | QIR-18\n"
+        (("QUALITY INSPECTION RECORD | QIR-18\n"
          "Field inspection dated 18 October 2026.\n"
          "1. Inspection summary\n"
          "Six control circuits were checked during the preliminary field inspection. Four circuits\n"
          "passed and two circuits require retesting.\n"
          "2. Circuit results\nC-01 PASS Continuity confirmed\nC-02 PASS Continuity confirmed\n"
          "C-05 RETEST Insulation resistance below threshold\n"
-         "C-06 RETEST Label discrepancy unresolved",),
+         "C-06 RETEST Label discrepancy unresolved"),),
     )
     cite = "06_QA.pdf | page 1 | chunk 0"
     try:
@@ -131,9 +131,9 @@ def test_qa_pass_counts_visible_in_relevant_fallback():
 
 def test_wrong_quantities_and_actions_remain_unverified_after_wrap_normalization():
     conn, citations = _evidence([
-        "2. Contract scope of work\n"
-        "(cid:127) Supply and install three (3) 500 kVA transformers in Building A.\n"
-        "(cid:127) Civil excavation and trench backfilling are excluded."
+        ("2. Contract scope of work\n"
+         "(cid:127) Supply and install three (3) 500 kVA transformers in Building A.\n"
+         "(cid:127) Civil excavation and trench backfilling are excluded.")
     ])
     try:
         for wrong in (
