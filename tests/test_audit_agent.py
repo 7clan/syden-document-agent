@@ -389,8 +389,8 @@ def test_citation_decoration_cannot_hide_invented_work_or_wrong_dates():
     for wrong in (
         "- The contractor shall install four transformers and commission the plant.",
         "- The contractor shall install two transformers, along with building a hospital.",
-        "- The contractor shall install two transformers, along with submitting "
-        "design drawings by 16 November 2026.",
+        ("- The contractor shall install two transformers, along with submitting "
+         "design drawings by 16 November 2026."),
         "- Civil excavation is included as required work.",
         "- Commissioning the plant is excluded.",
     ):
