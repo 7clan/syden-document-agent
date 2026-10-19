@@ -241,7 +241,11 @@ def _source_clauses(text: str) -> list[str]:
         current = f"{current} {line}".strip()
     if current:
         groups.append(current)
-    return [part for group in groups for part in _split_prose(group)]
+    # Visual line-wraps are not claim boundaries. Keep source negations such as
+    # "without a signed change order" in the same clause as their assertion.
+    return [piece.strip() for group in groups
+            for piece in re.split(r"(?<=[.!?])\s+|;\s*", group)
+            if piece.strip()]
 
 
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
@@ -339,6 +343,8 @@ def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
             lower = p.lower()
             exclusion = bool(_NEGATIVE_SCOPE.search(p))
             deliverable = bool(re.search(r"\b(?:submit|deadline|handover)\b", lower))
+            if asks_scope and deliverable and not asks_deadlines:
+                continue
             score = 2 * len(question_terms & words)
             if asks_exclusion:
                 score += 15 if exclusion else -8
@@ -366,7 +372,25 @@ def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
             candidates.append((score, len(candidates),
                                f"- **{label}:** {p[:360]} — {citation}"))
     candidates.sort(key=lambda item: (-item[0], item[1]))
-    return [line for _, _, line in candidates[:6]]
+    # A scope-plus-exclusions question needs evidence from each requested section,
+    # even when one high-scoring section has many individual paragraphs.
+    chosen: list[tuple[int, int, str]] = []
+    if asks_scope:
+        for label in ("Scope of work", "Exclusions", "Deliverables"):
+            if label == "Exclusions" and not asks_exclusion:
+                continue
+            if label == "Deliverables" and not asks_deadlines:
+                continue
+            match = next((item for item in candidates
+                          if f"**{label}:**" in item[2]), None)
+            if match is not None and match not in chosen:
+                chosen.append(match)
+    for item in candidates:
+        if len(chosen) >= 6:
+            break
+        if item not in chosen:
+            chosen.append(item)
+    return [line for _, _, line in chosen]
 
 
 def _question_filter(question: str, original: dict[str, Any]) -> dict[str, Any]:
