@@ -169,7 +169,7 @@ with st.sidebar:
                 symbol = ("📕" if extension == ".pdf" else "📘" if extension == ".docx"
                           else "📗")
                 status = statuses.get(name, {}).get("status", "not indexed")
-                st.markdown(f"{symbol} **{name}** · {status}")
+                st.text(f"{symbol} {name} · {status}")
         failed = [doc for doc in indexed["documents"]
                   if doc["status"] != "ready" or doc["error"]]
         if failed:
@@ -180,7 +180,7 @@ with st.sidebar:
                 options=disk_files,
                 index=None,
                 placeholder="Select a document",
-                key=f"manage_file_{str(target_folder)}",
+                key=f"manage_file_{target_folder!s}",
             )
             action = st.radio(
                 "What should happen to it?",
