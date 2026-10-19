@@ -15,6 +15,7 @@ from syden_agent.db import connect
 from syden_agent.ingest import ingest_folder
 from syden_agent.tools import extract_dates, list_documents, query_spreadsheet
 from syden_agent.ui_format import display_safe_rows
+from syden_agent.uploads import save_uploaded_file
 
 load_dotenv()
 st.set_page_config(page_title="SYDEN Document Agent", page_icon="📄", layout="wide")
@@ -71,6 +72,42 @@ with st.sidebar:
             st.session_state["index_report"] = ingest_folder(conn, folder)
             st.session_state.pop("last_answer", None)
             st.session_state.pop("csv_export", None)
+    st.caption("Add downloaded files without moving them manually:")
+    revision = st.session_state.get("_document_upload_revision", 0)
+    selected_files = st.file_uploader(
+        "Choose PDF, Excel, or Word files",
+        type=["pdf", "xlsx", "xlsm", "xls", "docx"],
+        accept_multiple_files=True,
+        key=f"document_upload_{revision}",
+    )
+    if st.button("Add selected files and index", disabled=not selected_files,
+                 use_container_width=True):
+        added: list[str] = []
+        errors: list[str] = []
+        max_bytes = int(os.getenv("SYDEN_MAX_FILE_MB", "100")) * 1024 * 1024
+        with st.spinner("Saving and indexing selected documents..."):
+            for selected in selected_files:
+                try:
+                    saved = save_uploaded_file(
+                        folder, selected.name, selected.getbuffer(), max_bytes,
+                    )
+                    added.append(saved)
+                except (OSError, ValueError) as exc:
+                    errors.append(f"{selected.name}: {exc}")
+            if added:
+                st.session_state["index_report"] = ingest_folder(conn, folder)
+                st.session_state.pop("last_answer", None)
+                st.session_state.pop("csv_export", None)
+                # Clear the file chooser so the same selection is not added again.
+                st.session_state["_document_upload_revision"] = revision + 1
+        if added:
+            st.success(f"Saved {len(added)} file(s) to {Path(folder).expanduser().resolve()}: "
+                       + ", ".join(added))
+            report = st.session_state["index_report"]
+            if report.get("failed") or report.get("error"):
+                st.warning("Some documents could not be indexed; inspect the report below.")
+        for error in errors:
+            st.error(error)
     if "index_report" in st.session_state:
         st.json(st.session_state["index_report"], expanded=False)
     st.subheader("Indexed files")
