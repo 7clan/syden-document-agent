@@ -112,7 +112,7 @@ _PROSE_FILLER = {
     "requires", "required", "responsible", "must", "shall", "will", "should",
     "perform", "performed", "undertake", "undertaken", "carry", "out", "do",
     "main", "also", "such", "like", "specific", "exact", "wording", "verbatim",
-    "explicitly",
+    "explicitly", "additionally",
     "below", "above", "here", "there", "both", "only", "same", "details",
     "each", "all", "some", "part", "parts", "item", "items", "namely",
     "deliverable", "excluded", "exclude", "not", "never", "no", "without",
@@ -442,6 +442,26 @@ def _verified_dates_answer(conn: sqlite3.Connection,
                   trace, result)
 
 
+_UNVERIFIED_COMPLETENESS = re.compile(
+    r"(?im)^[ \t]*no[ \t]+(?:other|additional)[ \t]+[^\n.]+?"
+    r"[ \t]+(?:was|were|have[ \t]+been)[ \t]+(?:found|identified|listed)"
+    r"[ \t]+in[ \t]+the[ \t]+(?:indexed|provided|retrieved)[ \t]+documents?"
+    r"[ \t]*\.[ \t]*$"
+)
+
+
+def _omit_unverified_completeness(text: str) -> tuple[str, list[str]]:
+    """Drop unsupported claims of exhaustive coverage, never substantive clauses.
+
+    A few search hits cannot prove that *no other* obligations exist. These
+    standalone model-added sentences are excluded from the displayed summary,
+    with an audit record and a visible coverage qualification.
+    """
+    omitted = _UNVERIFIED_COMPLETENESS.findall(text)
+    filtered = _UNVERIFIED_COMPLETENESS.sub("", text)
+    return filtered.strip(), [item.strip() for item in omitted]
+
+
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
@@ -467,7 +487,8 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
-    if not _supported_prose(conn, text, verified):
+    verified_text, omitted_completeness = _omit_unverified_completeness(text)
+    if not _supported_prose(conn, verified_text, verified):
         # Store the rejected response in the local audit trail for diagnosis; never
         # present its unsupported claims as verified evidence.
         trace = [*trace, {"name": "answer_verification", "ok": False,
@@ -486,12 +507,21 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     # Search may return unrelated rows (e.g. an Excel BOQ mentioning transformers
     # during a contract-scope question). Prefer the model's explicitly cited,
     # locally resolved locations ONLY if they independently verify every claim.
-    explicit = [cite for cite in verified if cite in text]
-    if explicit and _supported_prose(conn, text, explicit):
+    explicit = [cite for cite in verified if cite in verified_text]
+    if explicit and _supported_prose(conn, verified_text, explicit):
         verified = explicit
+    # A model cannot establish corpus-wide absence from a few search results.
+    # Preserve its supported summary, transparently omitting that extra claim.
+    if omitted_completeness:
+        trace = [*trace, {"name": "answer_verification", "ok": True,
+                         "reason": "Unverified completeness assertion omitted",
+                         "omitted_claims": omitted_completeness}]
     # Provider-specific citation tokens are not source references. Expose only
     # citations resolved from the local index in Answer.sources.
-    clean_text = re.sub(r"【[^】]*】", "", text).strip()
+    clean_text = re.sub(r"【[^】]*】", "", verified_text).strip()
+    if omitted_completeness:
+        clean_text += ("\n\n*Only the retrieved evidence is summarized; "
+                       "complete coverage was not established.*")
     return Answer(clean_text or "The provider returned no answer text.", verified, trace)
 
 
