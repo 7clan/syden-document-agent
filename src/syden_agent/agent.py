@@ -825,6 +825,15 @@ def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8,
         *, provider: str | None = None, model: str | None = None) -> Answer:
     if not question.strip():
         return Answer("Please enter a question.", [], [])
+    # This interface currently sends standalone questions, not conversation
+    # history. Never silently treat "those items" as the entire BOQ.
+    if re.search(r"(?i)\b(?:those|these|previous)\s+(?:items?|rows?|results?|ones?)\b",
+                 question):
+        return Answer(
+            "Please specify which items you mean. Each question is independent. "
+            "For example: 'What is the total amount of BOQ items strictly above "
+            "SAR 1,000,000 in 04_Electrical_BOQ.xlsx?'", [], [],
+        )
     if not conn.execute("SELECT 1 FROM documents WHERE status='ready' LIMIT 1").fetchone():
         return Answer("No readable documents are indexed. Ingest a folder first.", [], [])
     chosen_provider = (provider if provider is not None else
