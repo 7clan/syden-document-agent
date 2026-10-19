@@ -593,6 +593,51 @@ def _omit_unverified_completeness(text: str) -> tuple[str, list[str]]:
     return filtered.strip(), [item.strip() for item in omitted]
 
 
+_SMALL_CARDINALS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _verified_circuit_counts(conn: sqlite3.Connection, citations: list[str],
+                             question: str) -> Answer | None:
+    """Answer a narrowly stated QA-count question from a single source clause.
+
+    Number words in PDFs differ from model-generated numerals. Only return
+    counts explicitly present together in the same inspection sentence.
+    A document-list citation alone cannot establish either count.
+    """
+    if not re.search(r"(?i)\bhow many circuits\b", question):
+        return None
+    if not re.search(r"(?i)\b(?:pass(?:ed)?|retest(?:ing)?)\b", question):
+        return None
+    for cite in citations:
+        evidence = get_evidence(conn, cite)
+        if "text" not in evidence:
+            continue
+        for clause in _source_clauses(evidence["text"]):
+            match = re.search(
+                r"(?i)\b(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)"
+                r"\s+circuits\s+passed\s+and\s+"
+                r"(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)"
+                r"\s+circuits\s+require\s+retesting\b",
+                clause,
+            )
+            if match is None:
+                continue
+            counts = [
+                int(term) if term.isdigit() else _SMALL_CARDINALS[term.lower()]
+                for term in match.groups()
+            ]
+            return Answer(
+                f"**Inspection results:** {counts[0]} circuits passed; "
+                f"{counts[1]} circuits require retesting.\n\n"
+                f"Source: {cite}",
+                [cite], [],
+            )
+    return None
+
+
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
@@ -618,6 +663,10 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
+    qa = _verified_circuit_counts(conn, verified, question)
+    if qa is not None:
+        qa.tool_calls = trace
+        return qa
     display_text, omitted_completeness = _omit_unverified_completeness(text)
     if provider == "gemini":
         verified_text = _gemini_verification_text(display_text)
