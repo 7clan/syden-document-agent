@@ -159,6 +159,25 @@ def _split_prose(text: str) -> list[str]:
     return combined
 
 
+def _split_coordinated_claims(clause: str) -> list[str]:
+    """Split separately asserted actions; verify each against its own source clause.
+
+    Only explicit action verbs are split. We never combine unrelated source
+    clauses to manufacture a new action/object or change an exclusion.
+    """
+    return [part.strip() for part in re.split(
+        r"(?i)\s*,?\s*\band\s+(?=(?:install|commission|submit|deliver|provide|"
+        r"construct|build|perform|undertake)(?:s|ed|ing)?\b)", clause
+    ) if part.strip()]
+
+
+_PRESENTATION_PREFACE = re.compile(
+    r"(?i)^based on (?:the )?(?:indexed|provided|retrieved) "
+    r"(?:project )?documents?\s*(?:\(\s*\))?\s*,?\s*"
+    r"the scope of work and exclusions are as follows\s*:\s*$"
+)
+
+
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
     """Conservatively match factual claims to cited evidence, including simple paraphrases.
 
@@ -207,7 +226,14 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
             return True
         return False
 
-    sentences = _split_prose(claim)
+    # A narrow, factual-content-free introduction is not a claim about the contract.
+    # All substantive assertions (including bullets and coordinated actions) still
+    # have to match local evidence individually.
+    sentences = [
+        atom for sentence in _split_prose(claim)
+        if not _PRESENTATION_PREFACE.fullmatch(sentence.strip())
+        for atom in _split_coordinated_claims(sentence)
+    ]
     return bool(sentences) and all(supported(sentence) for sentence in sentences)
 
 
