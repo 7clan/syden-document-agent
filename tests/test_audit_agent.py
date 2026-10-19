@@ -240,3 +240,18 @@ def test_scope_verifier_accepts_sectioned_summary_and_checks_exclusion_heading()
                             [cite])
     assert not _supported_prose(conn,
                                 "Scope of Work:\n- Civil excavation.", [cite])
+
+
+def test_contract_fallback_sources_exclude_unrelated_document_list_entries():
+    conn, cite = _contract_evidence()
+    conn.execute("INSERT INTO documents(path,kind,status) "
+                 "VALUES('BOQ.xlsx','xlsx','ready')")
+    docs = ["BOQ.xlsx | document", "Contract.pdf | document", cite]
+    answer = _final_answer(
+        conn, "The contractor must perform civil excavation.", docs,
+        [{"name": "list_documents", "ok": True},
+         {"name": "search_documents", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert "Verified source excerpts" in answer.text
+    assert answer.sources == [cite]
