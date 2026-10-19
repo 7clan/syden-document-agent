@@ -52,6 +52,26 @@ syden-agent smoke  # tests real provider function calling with synthetic, noncon
 python -m streamlit run app.py
 ```
 
+### Add downloaded documents in the browser (PDF, Excel, Word)
+
+Keep the existing **Document folder** path field for folders already on disk. Or use the
+new multi-file chooser beneath it to add downloaded files without moving them yourself:
+
+1. In Streamlit, set **Folder path on this computer** to `documents` for a clean corpus,
+   or keep `.local/demo_documents` to add to the demonstration corpus.
+2. Click **Choose PDF, Excel, or Word files**, select one or many files from Downloads
+   (Ctrl-click or Shift-click in the Windows file picker), and confirm with **Open**.
+3. Click **Add selected files and index**. The app saves them into the selected folder,
+   indexes that folder, and lists the resulting documents under **Indexed files**.
+4. Ask the agent questions normally; no file path is required in the question.
+
+Supported uploads: `.pdf`, `.xlsx`, `.xlsm`, `.xls`, and `.docx`.
+If a filename is already taken, the new file gets a suffix such as `Contract (2).pdf`
+**without overwriting** the original. Unsupported and oversized uploads are refused;
+files that cannot be read are reported by the indexer. Selecting a file in a browser is
+necessary for access to your local Downloads: typing only its filename cannot grant
+browser access to that local file. The old **Index folder** button still works.
+
 ### Choose a provider and model in Streamlit
 
 The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
