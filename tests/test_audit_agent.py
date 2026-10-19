@@ -749,3 +749,69 @@ def test_gemini_preface_handling_cannot_hide_unsupported_contract_claims():
         "Summarize the scope of work, including exclusions.", provider="gemini",
     ).tool_calls[-1]["ok"] is False
     conn.close()
+
+
+
+def test_gemini_live_nested_submission_and_existing_preface_pass():
+    """Real Gemini 3.5 Flash Lite response: separate evidence-backed actions."""
+    conn, cite = _contract_evidence()
+    generated = (
+        "Based on the indexed documents, here is the summary of the scope "
+        "of work and exclusions:\n\n"
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission the plant, including submitting design drawings by "
+        "15 November 2026 [Contract.pdf | page 1 | chunk 0].\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract "
+        "[Contract.pdf | page 1 | chunk 0]."
+    )
+    answer = _final_answer(
+        conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.", provider="gemini",
+    )
+    assert answer.text == generated
+    assert answer.sources == [cite]
+    assert not any(call.get("ok") is False for call in answer.tool_calls)
+    # Other providers keep the old behavior: only Gemini gets this adapter.
+    for provider in ("groq", "ollama_cloud"):
+        independent = _final_answer(
+            conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.", provider=provider,
+        )
+        assert "Verified source excerpts" in independent.text
+    conn.close()
+
+
+def test_gemini_nested_submission_still_rejects_wrong_claims():
+    conn, cite = _contract_evidence()
+    generated = (
+        "Based on the indexed documents, here is the summary of the scope "
+        "of work and exclusions:\n\n"
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission the plant, including submitting design drawings by "
+        "15 November 2026 [Contract.pdf | page 1 | chunk 0].\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract "
+        "[Contract.pdf | page 1 | chunk 0]."
+    )
+    invalid = (
+        generated.replace("two transformers", "three transformers"),
+        generated.replace("commission the plant", "commission a hospital"),
+        generated.replace("15 November 2026", "16 November 2026"),
+        generated.replace("design drawings", "architectural drawings"),
+        generated.replace("is excluded", "is included"),
+        generated + "\n* **Additional tasks:** Build a hospital.",
+        generated.replace(
+            "including submitting", "including excluding submission of"
+        ),
+        generated.replace(
+            "the scope of work and exclusions:",
+            "the scope of work, exclusions, and building a hospital:",
+        ),
+    )
+    for response in invalid:
+        answer = _final_answer(
+            conn, response, [cite], [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.", provider="gemini",
+        )
+        assert "Verified source excerpts" in answer.text, response
+        assert answer.tool_calls[-1]["ok"] is False, response
+    conn.close()
