@@ -38,6 +38,8 @@ def inspect_document(conn: sqlite3.Connection, file: str) -> dict[str, Any]:
     if doc["kind"] == "pdf":
         p = _rows(conn, "SELECT page,chunk,substr(text,1,550) AS preview FROM passages "
                   "WHERE document_id=? ORDER BY page,chunk LIMIT 12", (doc["id"],))
+        for part in p:
+            part["citation"] = f"{doc['path']} | page {part['page']} | chunk {part['chunk']}"
         tables = _rows(conn, "SELECT page,table_num,COUNT(*) AS populated_rows,method "
                        "FROM pdf_boq_rows WHERE document_id=? GROUP BY page,table_num,method "
                        "ORDER BY page,table_num LIMIT 20", (doc["id"],))
