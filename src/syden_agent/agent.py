@@ -198,7 +198,7 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
         )
         # Section titles may include a reference without asserting another fact.
         text = re.sub(
-            rf"\(\s*as documented in\s+\*?{filename}\*?\s*,\s*page\s+\d+\s*\)",
+            rf"\(\s*as (?:documented|stated) in\s+\*?{filename}\*?\s*,\s*page\s+\d+\s*\)",
             "", text, flags=re.IGNORECASE,
         )
         text = re.sub(
