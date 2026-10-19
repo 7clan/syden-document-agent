@@ -297,3 +297,48 @@ def test_fallback_includes_deliverables_when_explicitly_requested():
     assert "15 November 2026" in answer.text
     assert "install generators" not in answer.text
     conn.close()
+
+    
+    
+def test_live_gemini_scope_preview_is_verified_as_separate_claims():
+    """Regression from real tool-call audit: valid cross-clause summary was rejected."""
+    conn, cite = _contract_evidence()
+    generated = (
+        "Based on the indexed project documents (`Contract.pdf | page 1 | chunk 0`), "
+        "the scope of work and exclusions are as follows:\n\n"
+        "* **Scope of Work:** The Contractor shall install two transformers and "
+        "commission the plant, and submit design drawings by 15 November 2026.\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract."
+    )
+    assert _supported_prose(conn, generated, [cite])
+    answer = _final_answer(
+        conn, generated, [cite],
+        [{"name": "list_documents", "ok": True},
+         {"name": "search_documents", "ok": True},
+         {"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.text == generated
+    assert answer.sources == [cite]
+    assert not any(call["name"] == "answer_verification" for call in answer.tool_calls)
+    conn.close()
+
+
+def test_coordinated_summary_does_not_launder_unsupported_obligations():
+    conn, cite = _contract_evidence()
+    intro = ("Based on the indexed project documents (`Contract.pdf | page 1 | chunk 0`), "
+             "the scope of work and exclusions are as follows:\n")
+    invalid = (
+        "* **Scope of Work:** The Contractor shall install three transformers and "
+        "submit design drawings by 15 November 2026.",
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and perform civil excavation.",
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and submit design drawings by 16 November 2026.",
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission civil excavation.",
+        "* **Exclusions:** Commissioning the plant is excluded.",
+    )
+    for claim in invalid:
+        assert not _supported_prose(conn, intro + claim, [cite]), claim
+    conn.close()
