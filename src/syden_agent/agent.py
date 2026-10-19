@@ -215,6 +215,41 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
     return text
 
 
+_RESPONSE_SECTIONS = re.compile(
+    r"(?:scope(?: of work)?|exclusions?|deliverables?|included work|outside scope)",
+    re.IGNORECASE,
+)
+_RESPONSE_SUBHEADINGS = re.compile(
+    r"(?:primary|key|main) (?:tasks|activities|work)|tasks|activities|deliverables?",
+    re.IGNORECASE,
+)
+
+
+def _response_claims(text: str) -> list[str]:
+    """Extract asserted clauses from prose and nested Markdown bullet outlines.
+
+    Heading labels are not claims. Unsupported substantive content is never
+    silently dropped: it remains a clause and must match a source passage.
+    """
+    result: list[str] = []
+    section = ""
+    for line in text.splitlines():
+        stripped = line.strip(" \t-*#:`  \r")
+        if not stripped:
+            continue
+        if _RESPONSE_SECTIONS.fullmatch(stripped):
+            section = f"{stripped}: "
+            continue
+        if _RESPONSE_SUBHEADINGS.fullmatch(stripped) and re.search(
+                r":\s*$", line):
+            continue
+        for sentence in _split_prose(stripped):
+            if _PRESENTATION_PREFACE.fullmatch(sentence.strip()):
+                continue
+            result.extend(_split_coordinated_claims(section + sentence))
+    return result
+
+
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
     """Conservatively match factual claims to cited evidence, including simple paraphrases.
 
@@ -272,14 +307,10 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
             return True
         return False
 
-    # A narrow, factual-content-free introduction is not a claim about the contract.
-    # All substantive assertions (including bullets and coordinated actions) still
-    # have to match local evidence individually.
-    sentences = [
-        atom for sentence in _split_prose(claim)
-        if not _PRESENTATION_PREFACE.fullmatch(sentence.strip())
-        for atom in _split_coordinated_claims(sentence)
-    ]
+    # Parse Markdown structure before facts: a nested "Primary tasks:" bullet is
+    # a label, not a contract assertion. Preserve its surrounding section so a
+    # short "Civil excavation" bullet under Exclusions is still checked as negative.
+    sentences = _response_claims(claim)
     return bool(sentences) and all(supported(sentence) for sentence in sentences)
 
 
