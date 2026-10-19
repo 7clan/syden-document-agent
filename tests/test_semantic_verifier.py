@@ -60,7 +60,7 @@ def test_invented_number_rejected_even_if_external_semantic_judge_approves():
             "What is included?",
             semantic_checker=lambda _q, _a, _e: _judge(cite, source),
         )
-        assert "Verified source excerpts" in answer.text
+        assert "could not be verified" in answer.text
         assert any(x["name"] == "answer_verification" and not x["ok"]
                    for x in answer.tool_calls)
     finally:
