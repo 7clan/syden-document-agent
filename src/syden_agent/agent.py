@@ -99,6 +99,7 @@ _PROSE_ALIASES = {
     "exclusions": "exclude", "exclusion": "exclude", "excluded": "exclude",
     "excludes": "exclude", "excluding": "exclude",
     "generators": "generator", "deliverables": "deliverable",
+    "sum": "value",  # Contract sum and contract value are interchangeable labels.
 }
 _PROSE_FILLER = {
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -189,6 +190,10 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
     """
     text = text.replace("\u00a0", " ").replace("\u202f", " ")
     for citation in citations:
+        # A source-list line is not a claim. Only recognized, indexed citations
+        # are removed; invented citations remain and fail normal verification.
+        text = re.sub(rf"(?m)^\s*[-*]\s*`?{re.escape(citation)}`?\s*$",
+                      "", text)
         filename = re.escape(citation.split(" | ")[0])
         text = re.sub(rf"\(\s*`?{re.escape(citation)}`?\s*\)", "", text)
         # Model-added references in Markdown headings and inline notes.
@@ -212,6 +217,7 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
             rf"\s*[,|]\s*chunk\s+\d+\s*[.*]*\s*",
             line, flags=re.IGNORECASE,
         ))
+    text = re.sub(r"(?mi)^\s*(?:sources?|references?)\s*:\s*$", "", text)
     return text
 
 
