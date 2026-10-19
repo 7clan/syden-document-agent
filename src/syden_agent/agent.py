@@ -12,7 +12,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .semantic_verifier import VERIFIER_SYSTEM, verification_request, verify_judgement
+from .claim_verifier import validate_claims
+from .semantic_verifier import verify_judgement
 from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
 
 load_dotenv()
@@ -35,9 +36,39 @@ Cite evidence exactly using the supplied source citations (PDF filename/page/chu
 filename/paragraph/table row, or Excel filename/sheet/cell). Quote or paraphrase only supported facts. If evidence is insufficient,
 say 'Not found in the indexed documents', with an explanation when appropriate.
 Copy identifiers exactly as stored, including ASCII hyphens; do not substitute typographic punctuation.
+For a final prose answer, return ONLY a JSON object with keys answer (string),
+insufficient (boolean), and claims (array). Each claim has text (one factual
+statement) and supports (array of {citation, quote}). The quote must be an exact
+contiguous excerpt from the cited tool evidence, allowing PDF line wrapping.
+Use only citations returned by tools in this conversation. Split claims so each
+has its own support. Set insufficient=true when the evidence cannot answer.
+The answer field summarizes your conclusion; the application will display only
+claims that pass local provenance and comparable-fact checks. Do not make a
+corpus-wide absence or completeness claim from a few search results.
 Be concise, structured, and precise. Do not execute commands, access the network except the
 configured LLM provider, or change documents.
 """
+
+ANSWER_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "answer": {"type": "string"},
+        "insufficient": {"type": "boolean"},
+        "claims": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "text": {"type": "string"},
+                "supports": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {"citation": {"type": "string"}, "quote": {"type": "string"}},
+                    "required": ["citation", "quote"],
+                }},
+            },
+            "required": ["text", "supports"],
+        }},
+    },
+    "required": ["answer", "insufficient", "claims"],
+}
 
 
 @dataclass
@@ -46,6 +77,8 @@ class Answer:
     sources: list[str]
     tool_calls: list[dict[str, Any]]
     structured: dict[str, Any] | None = None
+    verification_status: str = "unverified"
+    claims: list[dict[str, Any]] | None = None
 
 
 def _collect_citations(value: Any) -> list[str]:
@@ -494,7 +527,8 @@ def _verified_numeric_answer(conn: sqlite3.Connection, question: str,
                      f"(first cells: {', '.join(result['unknown_amount_cells'][:10])}).")
     sources = _verified_sources(conn, [row["citation"] for row in valid] +
                                 result["unknown_amount_cells"])
-    return Answer("\n".join(lines), sources, trace, result)
+    return Answer("\n".join(lines), sources, trace, result,
+                  "evidence_linked" if result["incomplete"] else "deterministically_verified")
 
 
 def _needs_dates_query(question: str) -> bool:
@@ -533,7 +567,7 @@ def _verified_dates_answer(conn: sqlite3.Connection,
         lines.append("Coverage warnings: " + "; ".join(result["coverage_warnings"]))
     lines.append("Context is a candidate association, not a verified deadline or obligation.")
     return Answer("\n".join(lines), _verified_sources(conn, [d["citation"] for d in dates]),
-                  trace, result)
+                  trace, result, "evidence_linked")
 
 
 _GEMINI_PRESENTATION_INTRO = re.compile(
@@ -599,7 +633,8 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
                   date_called: bool = False, provider: str = "",
-                  semantic_checker: Callable[[str, str, dict[str, str]], Any] | None = None) -> Answer:
+                  semantic_checker: Callable[[str, str, dict[str, str]], Any] | None = None,
+                  structured_mode: bool = False) -> Answer:
     verified = _verified_sources(conn, citations)
     # Prefer evidence locations to file-list entries when both were retrieved.
     # A document-level citation confirms existence, not the factual statement.
@@ -621,6 +656,31 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
+    if structured_mode:
+        result = validate_claims(conn, text, verified, question)
+        retrieval_issues = [call["name"] for call in trace
+                            if not call.get("ok", True) or call.get("truncated")
+                            or call.get("incomplete")]
+        if retrieval_issues:
+            if result["status"] == "deterministically_verified":
+                result["status"] = "evidence_linked"
+            result["answer"] += ("\n\nRetrieval was incomplete or a tool failed: "
+                                 + ", ".join(dict.fromkeys(retrieval_issues)) + ".")
+        if result["reason"] == "Malformed or missing structured answer":
+            excerpts = [(cite, _evidence_text(get_evidence(conn, cite))[:350])
+                        for cite in verified[:3] if not cite.endswith(" | document")]
+            excerpts = [(cite, excerpt) for cite, excerpt in excerpts if excerpt]
+            if excerpts:
+                result["answer"] += "\n\nRetrieved source excerpts:\n" + "\n".join(
+                    f"- {excerpt} — {cite}" for cite, excerpt in excerpts)
+                result["sources"] = [cite for cite, _ in excerpts]
+        audit = {"name": "claim_validation", "ok": result["status"] != "unverified",
+                 "status": result["status"],
+                 "claims": [{"status": item["status"], "sources": item["sources"],
+                             "reason": item["reason"]} for item in result["claims"]],
+                 "reason": result["reason"]}
+        return Answer(result["answer"], result["sources"], [*trace, audit],
+                      verification_status=result["status"], claims=result["claims"])
     display_text, omitted_completeness = _omit_unverified_completeness(text)
     if provider == "gemini":
         verified_text = _gemini_verification_text(display_text)
@@ -749,19 +809,6 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
         raise ValueError("A Gemini model ID is required.")
     client = genai.Client(api_key=key)
 
-    def semantic_check(prompt_question: str, draft: str,
-                       evidence: dict[str, str]) -> str:
-        if os.getenv("SYDEN_SEMANTIC_VERIFY", "1").strip() == "0":
-            return ""
-        response = client.models.generate_content(
-            model=model,
-            contents=verification_request(prompt_question, draft, evidence),
-            config=types.GenerateContentConfig(
-                system_instruction=VERIFIER_SYSTEM, temperature=0,
-            ),
-        )
-        return response.text or ""
-
     funcs = [types.FunctionDeclaration(name=t["name"], description=t["description"],
                                         parameters_json_schema=t["parameters"]) for t in TOOL_SCHEMAS]
     functions = types.Tool(function_declarations=funcs)
@@ -791,7 +838,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 continue
             return _final_answer(conn, text, citations, tool_calls, question, numeric_args,
                                  _has_dates_result(tool_calls), provider="gemini",
-                                 semantic_checker=semantic_check)
+                                 structured_mode=True)
         if not response.candidates or response.candidates[0].content is None:
             return Answer("Provider returned tool calls without usable message content.",
                           _verified_sources(conn,citations), tool_calls)
@@ -805,6 +852,8 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
             citations.extend(_collect_citations(result))
             tool_calls.append({"name": call.name, "args": args,
                                "ok": "error" not in result,
+                               "truncated": bool(result.get("truncated") or result.get("has_more")),
+                               "incomplete": bool(result.get("incomplete")),
                                "result_preview": json.dumps(result, default=str)[:1000]})
             parts.append(types.Part(function_response=types.FunctionResponse(
                 id=call.id, name=call.name, response={"result": result})))
@@ -846,22 +895,6 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     key, model, base_url = _compatible_config(provider, model_override=model_override)
     client = OpenAI(api_key=key, **({"base_url": base_url} if base_url else {}))
 
-    def semantic_check(prompt_question: str, draft: str,
-                       evidence: dict[str, str]) -> str:
-        if os.getenv("SYDEN_SEMANTIC_VERIFY", "1").strip() == "0":
-            return ""
-        check = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": VERIFIER_SYSTEM},
-                {"role": "user", "content": verification_request(
-                    prompt_question, draft, evidence,
-                )},
-            ],
-            temperature=0,
-        )
-        return check.choices[0].message.content or ""
-
     schemas = [{"type": "function", "function": {"name": t["name"],
                 "description": t["description"], "parameters": t["parameters"]}} for t in TOOL_SCHEMAS]
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM},
@@ -870,13 +903,27 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     citations: list[str] = []
     numeric_args: dict[str, Any] | None = None
     force_numeric = False
+    native_schema = provider == "openai"
     for _ in range(max_rounds):
-        response = client.chat.completions.create(model=model, messages=messages,
-                                                  tools=schemas,
-                                                  tool_choice=({"type": "function", "function": {
-                                                      "name": "query_spreadsheet"}} if force_numeric
-                                                      else "auto"),
-                                                  temperature=0)
+        request = {
+            "model": model, "messages": messages, "tools": schemas,
+            "tool_choice": ({"type": "function", "function": {"name": "query_spreadsheet"}}
+                            if force_numeric else "auto"), "temperature": 0,
+        }
+        if native_schema:
+            request["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
+        try:
+            response = client.chat.completions.create(**request)
+        except Exception as exc:  # Retry only unsupported schema errors.
+            if not native_schema or not re.search(
+                    r"response.format|json.schema|structured.output", str(exc), re.IGNORECASE):
+                raise
+            native_schema = False
+            request.pop("response_format")
+            trace.append({"name": "structured_output_fallback", "ok": True,
+                          "reason": "Native JSON schema unavailable; instructed JSON remains required"})
+            response = client.chat.completions.create(**request)
         msg = response.choices[0].message
         if not msg.tool_calls:
             text = (msg.content or "").strip()
@@ -893,7 +940,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 continue
             return _final_answer(conn, text, citations, trace, question, numeric_args,
                                  _has_dates_result(trace), provider=provider,
-                                 semantic_checker=semantic_check)
+                                 structured_mode=True)
         messages.append(msg.model_dump(exclude_none=True))
         for call in msg.tool_calls:
             try:
@@ -906,6 +953,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             citations.extend(_collect_citations(result))
             trace.append({"name": call.function.name,"args": args,
                           "ok": "error" not in result,
+                          "truncated": bool(result.get("truncated") or result.get("has_more")),
+                          "incomplete": bool(result.get("incomplete")),
                           "result_preview": json.dumps(result, default=str)[:1000]})
             messages.append({"role": "tool", "tool_call_id": call.id,
                              "content": json.dumps(result, default=str)})
@@ -948,4 +997,6 @@ def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8,
                           "OR (kind='pdf' AND error<>'')").fetchone()[0]
     if failed:
         answer.text = f"Coverage incomplete: {failed} file(s) failed indexing or have unreadable PDF pages.\n\n" + answer.text
+        if answer.verification_status == "deterministically_verified":
+            answer.verification_status = "evidence_linked"
     return answer

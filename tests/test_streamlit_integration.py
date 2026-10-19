@@ -52,4 +52,18 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     page.run()
     assert not page.exception
     assert any("Candidate dates" in title.value for title in page.subheader)
+    page.session_state["last_answer"] = Answer(
+        "- Drawings are due — Contract.pdf | page 1 | chunk 0",
+        ["Contract.pdf | page 1 | chunk 0"],
+        [{"name": "search_documents", "ok": True}],
+        verification_status="evidence_linked",
+        claims=[{"text": "Drawings are due", "status": "evidence_linked",
+                 "sources": ["Contract.pdf | page 1 | chunk 0"],
+                 "reason": "Interpretation is not independently proven",
+                 "quotes": [{"citation": "Contract.pdf | page 1 | chunk 0",
+                             "quote": "Submit design drawings by 15 November 2026."}]}],
+    )
+    page.run()
+    assert not page.exception
+    assert any("Evidence-linked interpretation" in item.value for item in page.caption)
     conn.close()

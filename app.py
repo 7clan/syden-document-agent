@@ -242,13 +242,25 @@ if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
 
 if "last_answer" in st.session_state:
     answer = st.session_state["last_answer"]
+    status_labels = {"deterministically_verified": "Deterministically verified",
+                     "evidence_linked": "Evidence-linked interpretation",
+                     "unverified": "Unverified or insufficient"}
+    st.caption("Verification: " + status_labels.get(answer.verification_status, "Unverified"))
     st.markdown(answer.text)
-    st.subheader("Verified source references")
+    st.subheader("Source references")
     if answer.sources:
         for source in answer.sources:
             st.code(source)
     else:
-        st.info("No verified citations returned. Do not rely on unsupported claims.")
+        st.info("No usable citations returned. Do not rely on unsupported claims.")
+    if answer.claims:
+        with st.expander("Claim evidence and verification status"):
+            for claim in answer.claims:
+                st.write(f"{status_labels.get(claim['status'], 'Unverified')}: "
+                         f"{claim['text']}")
+                st.caption(claim["reason"])
+                for support in claim.get("quotes", []):
+                    st.caption(f"{support['citation']}: “{support['quote']}”")
     with st.expander("Tool calls / audit trail"):
         st.json(answer.tool_calls)
 

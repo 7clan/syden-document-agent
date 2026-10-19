@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 from syden_agent.agent import (
+    _ask_gemini,
     _ask_openai,
     _collect_citations,
     _compatible_config,
@@ -84,17 +85,24 @@ def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkey
     conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
                  "VALUES(1,1,0,'Synthetic code ORCHID-7429')")
     messages_seen = []
+    requests_seen = []
     tool_message = SimpleNamespace(
         tool_calls=[SimpleNamespace(id="call_1", function=SimpleNamespace(
             name="search_documents", arguments='{"query":"ORCHID-7429"}'))],
         content=None,
         model_dump=lambda exclude_none: {"role": "assistant", "tool_calls": []},
     )
-    final_message = SimpleNamespace(tool_calls=None, content="The code is ORCHID-7429.")
+    final_message = SimpleNamespace(tool_calls=None, content=(
+        '{"answer":"The code is ORCHID-7429.","insufficient":false,'
+        '"claims":[{"text":"Synthetic code ORCHID-7429",'
+        '"supports":[{"citation":"smoke.pdf | page 1 | chunk 0",'
+        '"quote":"Synthetic code ORCHID-7429"}]}]}'
+    ))
     responses = [SimpleNamespace(choices=[SimpleNamespace(message=tool_message)]),
                  SimpleNamespace(choices=[SimpleNamespace(message=final_message)])]
 
     def create(**kwargs):
+        requests_seen.append(kwargs)
         messages_seen.append(kwargs["messages"][:])
         return responses.pop(0)
 
@@ -102,10 +110,13 @@ def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkey
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: fake_client))
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
     answer = _ask_openai(conn, "What is the synthetic code?", 3)
-    assert answer.text == "The code is ORCHID-7429."
+    assert "Synthetic code ORCHID-7429" in answer.text
     assert answer.sources == ["smoke.pdf | page 1 | chunk 0"]
+    assert answer.verification_status == "deterministically_verified"
     assert answer.tool_calls[0]["name"] == "search_documents"
     assert messages_seen[1][-1]["role"] == "tool"
+    assert len(messages_seen) == 2  # No verification-only request.
+    assert requests_seen[0]["response_format"]["type"] == "json_schema"
 
 
 def test_gemini_sdk_accepts_local_tool_declarations():
@@ -119,6 +130,79 @@ def test_gemini_sdk_accepts_local_tool_declarations():
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
     assert len(config.tools[0].function_declarations) == len(TOOL_SCHEMAS)
+
+
+def test_gemini_tool_loop_returns_structured_claim_without_verification_call(monkeypatch):
+    from google import genai
+    from google.genai import types
+
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('smoke.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'Synthetic code ORCHID-7429')")
+    cite = "smoke.pdf | page 1 | chunk 0"
+    first = SimpleNamespace(
+        function_calls=[SimpleNamespace(name="search_documents",
+                                        args={"query": "ORCHID-7429"}, id="call_1")],
+        candidates=[SimpleNamespace(content=types.Content(
+            role="model", parts=[types.Part.from_text(text="Searching")]))],
+    )
+    final = SimpleNamespace(function_calls=[], text=(
+        '{"answer":"Synthetic code ORCHID-7429","insufficient":false,'
+        '"claims":[{"text":"Synthetic code ORCHID-7429",'
+        '"supports":[{"citation":"smoke.pdf | page 1 | chunk 0",'
+        '"quote":"Synthetic code ORCHID-7429"}]}]}'
+    ))
+    responses = [first, final]
+    requests = []
+
+    def generate_content(**kwargs):
+        requests.append(kwargs)
+        return responses.pop(0)
+
+    fake = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    monkeypatch.setattr(genai, "Client", lambda **_kwargs: fake)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-not-real")
+    answer = _ask_gemini(conn, "What is the synthetic code?", 3)
+    assert answer.sources == [cite]
+    assert answer.verification_status == "deterministically_verified"
+    assert len(requests) == 2
+    assert answer.tool_calls[-1]["name"] == "claim_validation"
+
+
+def test_openai_unsupported_native_schema_retries_with_instructed_json(monkeypatch):
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('note.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'The test result was accepted.')")
+    tool_message = SimpleNamespace(
+        tool_calls=[SimpleNamespace(id="one", function=SimpleNamespace(
+            name="search_documents", arguments='{"query":"test result"}'))],
+        content=None, model_dump=lambda exclude_none: {"role": "assistant", "tool_calls": []},
+    )
+    final_message = SimpleNamespace(tool_calls=None, content=(
+        '{"answer":"Accepted","insufficient":false,"claims":[{'
+        '"text":"The test result was accepted.","supports":[{'
+        '"citation":"note.pdf | page 1 | chunk 0",'
+        '"quote":"The test result was accepted."}]}]}'
+    ))
+    responses = [tool_message, final_message]
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        if "response_format" in kwargs:
+            raise ValueError("response_format json_schema is not supported")
+        return SimpleNamespace(choices=[SimpleNamespace(message=responses.pop(0))])
+
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kw: fake))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
+    answer = _ask_openai(conn, "Was the test result accepted?", 3)
+    assert answer.verification_status == "deterministically_verified"
+    assert len(requests) == 3
+    assert "response_format" not in requests[1]
+    assert any(item["name"] == "structured_output_fallback" for item in answer.tool_calls)
 
 
 def test_boq_threshold_questions_require_numeric_tool():

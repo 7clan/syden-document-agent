@@ -68,11 +68,16 @@ def main() -> None:
                 answer = ask(conn, "What is the synthetic project code in smoke.pdf? "
                              "Use search_documents to find and cite it. Copy its exact characters "
                              "as plain ASCII; do not change the hyphen.")
-                result = {"success": bool(answer.tool_calls and answer.sources and
+                result = {"success": bool(any(call["name"] in {
+                                          "search_documents", "get_evidence", "inspect_document"}
+                                          and call.get("ok") for call in answer.tool_calls)
+                                          and answer.verification_status != "unverified"
+                                          and answer.sources and
                                           "ORCHID-7429" in answer.text and
                                           "could not be verified" not in answer.text),
                           "provider": os.getenv("LLM_PROVIDER", "gemini"),
                           "answer": answer.text, "sources": answer.sources,
+                          "verification_status": answer.verification_status,
                           "tool_calls": answer.tool_calls}
             except Exception as exc:  # noqa: BLE001 - report hosted API failures cleanly
                 result = {"success": False, "error": str(exc)}
@@ -80,7 +85,9 @@ def main() -> None:
             try:
                 answer = ask(conn, options.question)
                 result = {"answer": answer.text, "sources": answer.sources,
-                          "structured": answer.structured, "tool_calls": answer.tool_calls}
+                          "verification_status": answer.verification_status,
+                          "claims": answer.claims, "structured": answer.structured,
+                          "tool_calls": answer.tool_calls}
             except Exception as exc:  # noqa: BLE001 - CLI should report provider failures cleanly
                 result = {"error": str(exc)}
         # JSON escapes keep CLI output valid on Windows consoles with legacy code pages.
