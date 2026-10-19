@@ -61,8 +61,8 @@ new multi-file chooser beneath it to add downloaded files without moving them yo
    or keep `.local/demo_documents` to add to the demonstration corpus.
 2. Click **Choose PDF, Excel, or Word files**, select one or many files from Downloads
    (Ctrl-click or Shift-click in the Windows file picker), and confirm with **Open**.
-3. Click **Add selected files and index**. The app saves them into the selected folder,
-   indexes that folder, and lists the resulting documents under **Indexed files**.
+3. Click **Open** in the file picker. The app automatically saves the selected files into
+   that folder, indexes them, and lists them under **Indexed files**; no second button is needed.
 4. Ask the agent questions normally; no file path is required in the question.
 
 Supported uploads: `.pdf`, `.xlsx`, `.xlsm`, `.xls`, and `.docx`.
