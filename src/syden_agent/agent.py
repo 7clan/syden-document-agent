@@ -440,6 +440,22 @@ def _verified_dates_answer(conn: sqlite3.Connection,
                   trace, result)
 
 
+_GEMINI_PRESENTATION_INTRO = re.compile(
+    r"(?i)\A\s*based on the indexed project documents,\s*"
+    r"here is the summary of the scope of work,\s*"
+    r"including deliverables and exclusions:\s*\n"
+)
+
+
+def _gemini_verification_text(text: str) -> str:
+    """Ignore an exact Gemini presentation preface, not any factual claims.
+
+    Retain the complete original response for display. This adapter is only
+    applied to Gemini; Groq and Ollama retain their existing verification paths.
+    """
+    return _GEMINI_PRESENTATION_INTRO.sub("", text, count=1)
+
+
 _OLLAMA_LABEL_ONLY = re.compile(
     r"(?im)^[ \t]*[-*][ \t]+(?:[*_]{0,2})"
     r"(?:primary tasks|key tasks|main tasks|activities)"
@@ -502,8 +518,12 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
     display_text, omitted_completeness = _omit_unverified_completeness(text)
-    verified_text = (_ollama_verification_text(display_text)
-                     if provider == "ollama_cloud" else display_text)
+    if provider == "gemini":
+        verified_text = _gemini_verification_text(display_text)
+    elif provider == "ollama_cloud":
+        verified_text = _ollama_verification_text(display_text)
+    else:
+        verified_text = display_text
     if not _supported_prose(conn, verified_text, verified):
         # Store the rejected response in the local audit trail for diagnosis; never
         # present its unsupported claims as verified evidence.
@@ -604,7 +624,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                     text="Call extract_dates before answering the date question.")]))
                 continue
             return _final_answer(conn, text, citations, tool_calls, question, numeric_args,
-                                 _has_dates_result(tool_calls))
+                                 _has_dates_result(tool_calls), provider="gemini")
         if not response.candidates or response.candidates[0].content is None:
             return Answer("Provider returned tool calls without usable message content.",
                           _verified_sources(conn,citations), tool_calls)
