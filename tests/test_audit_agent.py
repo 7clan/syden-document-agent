@@ -157,3 +157,85 @@ def test_mocked_provider_tool_loop_uses_verified_numbers(tmp_path, monkeypatch):
     assert answer.tool_calls[0]["name"] == "query_spreadsheet"
     assert answer.structured["total_matches"] == 1
     assert "999" not in answer.text
+
+
+def _contract_evidence():
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) "
+                 "VALUES('Contract.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES(1,1,0,?)", (
+        "Scope of Work Contractor shall install two transformers and commission the plant. "
+        "Deliverable: Submit design drawings by 15 November 2026. "
+        "Exclusion: Civil excavation is excluded from this contract.",))
+    return conn, "Contract.pdf | page 1 | chunk 0"
+
+
+def test_scope_verifier_accepts_supported_paraphrases():
+    conn, cite = _contract_evidence()
+    valid = (
+        "The project scope includes the installation of two transformers and "
+        "commissioning of the plant. Civil excavation is not included.",
+        "According to the contract, the work comprises installation of two "
+        "transformers and plant commissioning, while civil excavation is excluded.",
+        "The contractor will install two transformers and commission the plant. "
+        "Civil excavation is excluded.",
+        "The contractor will install two transformers and commission the plant "
+        "without civil excavation.",
+        "The contractor must submit design drawings by 15 November 2026.",
+    )
+    for claim in valid:
+        assert _supported_prose(conn, claim, [cite]), claim
+        answer = _final_answer(conn, claim, [cite],
+                               [{"name": "search_documents", "ok": True}],
+                               "Summarize the scope of work, including exclusions.")
+        assert answer.text == claim
+        assert answer.sources == [cite]
+
+
+def test_scope_verifier_rejects_unsupported_claims_and_reversed_obligations():
+    conn, cite = _contract_evidence()
+    invalid = (
+        "The contractor must perform civil excavation.",
+        "The contractor must not install two transformers.",
+        "The contractor shall not commission the plant.",
+        "Civil excavation is included in the scope of work.",
+        "The contractor must install three transformers.",
+        "The contractor must install two transformers and three generators.",
+        "The contract excludes commissioning the plant.",
+        "The budget is SAR 50 million.",
+        "The contractor will install two transformers and deliver medical equipment.",
+    )
+    for claim in invalid:
+        assert not _supported_prose(conn, claim, [cite]), claim
+
+
+def test_unsupported_summary_falls_back_to_verified_excerpts():
+    conn, cite = _contract_evidence()
+    claim = "The contractor must perform civil excavation and install two transformers."
+    answer = _final_answer(conn, claim, [cite],
+                           [{"name": "search_documents", "ok": True}],
+                           "Summarize the scope of work, including exclusions.")
+    assert "could not be verified" in answer.text
+    assert "Verified source excerpts" in answer.text
+    assert "install two transformers" in answer.text
+    assert "Civil excavation is excluded" in answer.text
+    assert claim not in answer.text
+    assert answer.sources == [cite]
+
+
+def test_prose_verification_uses_clause_level_evidence_not_cross_clause_overlap():
+    conn, cite = _contract_evidence()
+    assert not _supported_prose(
+        conn, "The contractor shall commission civil excavation.", [cite])
+    assert not _supported_prose(
+        conn, "The contractor shall submit plant drawings by 1 November 2026.", [cite])
+
+
+def test_scope_verifier_accepts_sectioned_summary_and_checks_exclusion_heading():
+    conn, cite = _contract_evidence()
+    assert _supported_prose(conn,
+                            "Scope of Work:\n- Installation of two transformers and "
+                            "commissioning of the plant.\nExclusions:\n- Civil excavation.",
+                            [cite])
+    assert not _supported_prose(conn,
+                                "Scope of Work:\n- Civil excavation.", [cite])
