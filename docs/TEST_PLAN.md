@@ -103,3 +103,24 @@ the configured model returned 503 due to high demand; an older Lite model
 returned 404, and the provider-suggested Lite model returned 503. These are
 provider responses, not passing application checks. OpenAI remains untested
 without a key. Test the chosen model again before a live demo.
+
+## Verification hardening before PR #1 merge (2026-10-20)
+
+The claim verifier now checks numbers, dates, status words and negation in the
+relevant clause rather than across the whole quotation. Clear sentence,
+semicolon, contrast and repeated-subject conjunction boundaries are split;
+ambiguous relationships are omitted as unverified. Retrieved evidence about
+the same identifier is checked for conflicting decisions and comparable dates
+or quantities. Filename restrictions use full-name matching, including nested
+file basenames and multi-file questions, rather than substrings.
+
+`tests/test_claim_verifier.py` includes adversarial acceptance and rejection
+cases for opposite decisions on two records, swapped quantities and dates,
+unrelated negation, cherry-picked cross-document citations, filename suffix
+collisions, mixed-case names with spaces or punctuation, and quotes that share
+only a noun with an unsupported conclusion. They also check that one record
+can have different decisions for distinct subjects without a false conflict.
+An unknown explicitly named file cannot borrow another file's citation.
+A correct paraphrase remains evidence-linked; exact source wording remains
+deterministically verified.
+These synthetic cases do not measure accuracy on unseen project documents.

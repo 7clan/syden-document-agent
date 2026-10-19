@@ -29,10 +29,18 @@ STATUS_GROUPS = ({"approved", "accepted", "authorized", "signed"},
                  {"proposed", "draft", "pending", "requested"},
                  {"rejected", "denied", "refused"},
                  {"passed", "pass", "succeeded", "successful"},
-                 {"failed", "fail", "unsuccessful"})
+                 {"failed", "fail", "unsuccessful"},
+                 {"included", "include", "includes"},
+                 {"excluded", "exclude", "excludes"})
 NEGATION = re.compile(r"\b(?:not|never|without|excluded|exclude|excludes|no)\b", re.IGNORECASE)
 IDENTIFIER = re.compile(r"\b(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z]{1,8}[-–—]?\d+[A-Z0-9-]*\b", re.IGNORECASE)
 NUMBER = re.compile(r"(?<![\w])\d[\d,]*(?:\.\d+)?(?:\s*(?:thousand|million|billion))?(?!\w)", re.IGNORECASE)
+CLAUSE_BREAK = re.compile(r";\s*|(?<=[.!?])\s+(?=[A-Z])|,?\s+\b(?:while|whereas|but)\b\s+",
+                          re.IGNORECASE)
+STATUS_WORDS = set().union(*STATUS_GROUPS)
+PREDICATE = re.compile(r"\b(?:is|are|was|were|has|have|had|did|does|shall|must|will|"
+                       r"remains?|due|" + "|".join(sorted(STATUS_WORDS)) + r")\b",
+                       re.IGNORECASE)
 
 
 def normalize(text: str) -> str:
@@ -103,33 +111,148 @@ def _status(text: str) -> int | None:
     return found[0] if len(found) == 1 else None
 
 
-def _contradiction(claim: str, quotes: list[str]) -> str | None:
+def _clauses(text: str) -> list[str]:
+    """Use only clear sentence, semicolon, and contrast boundaries."""
+    clauses: list[str] = []
+    for part in CLAUSE_BREAK.split(text):
+        pieces = re.split(r"\s+and\s+", part, flags=re.IGNORECASE)
+        joined = [pieces[0]]
+        for piece in pieces[1:]:
+            left = _subject(joined[-1])
+            right = _subject(piece)
+            if left and right and left != right:
+                joined.append(piece)
+            else:
+                joined[-1] += " and " + piece
+        clauses.extend(item.strip(" ,;.!?\n") for item in joined if item.strip(" ,;.!?\n"))
+    return clauses
+
+
+def _identifiers(text: str) -> set[str]:
+    return {item.upper().replace("–", "-").replace("—", "-")
+            for item in IDENTIFIER.findall(text)}
+
+
+def _anchor_terms(text: str) -> set[str]:
+    """Score clause relevance without treating numbers or status words as entities."""
+    terms = {term for term in re.findall(r"[a-z]{3,}", text.casefold())
+             if term not in STOPWORDS and term not in CARDINALS
+             and term not in STATUS_WORDS and term not in {"not", "never"}}
+    # Preserve single-letter record labels such as "Pump A" without treating
+    # an initial article ("A pump") as an entity label.
+    labels = {letter.casefold() for letter in re.findall(r"(?<=\s)[A-Z](?=\s)", text)}
+    return terms | labels
+
+
+def _subject(text: str) -> frozenset[str]:
+    predicate = PREDICATE.search(text)
+    if predicate is None:
+        return frozenset()
+    lead = text[:predicate.start()]
+    return frozenset(_identifiers(lead) or _anchor_terms(lead))
+
+
+def _relevant_clauses(claim: str, quotes: list[str]) -> list[str]:
+    clauses = [clause for quote in quotes for clause in _clauses(quote)]
+    identifiers = _identifiers(claim)
+    if identifiers:
+        clauses = [clause for clause in clauses if identifiers <= _identifiers(clause)]
+        terms = _relation_terms(claim)
+    else:
+        terms = _anchor_terms(claim)
+    scored = [(len(terms & _anchor_terms(clause)), clause) for clause in clauses]
+    best = max((score for score, _ in scored), default=0)
+    if best:
+        return [clause for score, clause in scored if score == best]
+    return clauses if identifiers else []
+
+
+def _facts(text: str) -> tuple[frozenset[str], frozenset[Decimal], int | None, bool]:
+    dates, rest = _date_values(text)
+    return frozenset(dates), frozenset(numbers(rest)), _status(text), bool(NEGATION.search(text))
+
+
+def _relation_terms(text: str) -> set[str]:
+    _, rest = _date_values(text)
+    rest = IDENTIFIER.sub(" ", rest)
+    rest = NUMBER.sub(" ", rest)
+    return _anchor_terms(rest)
+
+
+def _contradiction(claim: str, clauses: list[str]) -> str | None:
     claim_status = _status(claim)
-    quote_statuses = {_status(quote) for quote in quotes} - {None}
-    if claim_status is not None and quote_statuses and claim_status not in quote_statuses:
-        return "Approval or decision status conflicts with cited evidence"
-    if len(quote_statuses) > 1:
+    source_statuses = {_status(clause) for clause in clauses} - {None}
+    if len(source_statuses) > 1:
         return "Cited sources state conflicting decision statuses"
+    if claim_status is not None and source_statuses and claim_status not in source_statuses:
+        return "Approval or decision status conflicts with cited evidence"
+    if claim_status is not None and not source_statuses:
+        return "Decision status is absent from relevant evidence"
     claim_negated = bool(NEGATION.search(claim))
-    source_negations = {bool(NEGATION.search(quote)) for quote in quotes}
-    if len(source_negations) == 1 and claim_negated != next(iter(source_negations)):
+    source_negations = {bool(NEGATION.search(clause)) for clause in clauses}
+    if len(source_negations) > 1:
+        return "Relevant evidence has conflicting negation"
+    if source_negations and claim_negated != next(iter(source_negations)):
         return "Negation conflicts with cited evidence"
     return None
 
 
 def _external_conflict(conn: sqlite3.Connection, claim: str,
-                       cited: list[str], observed: set[str]) -> str | None:
-    """Flag opposite explicit statuses for the same identifier in retrieved sources."""
-    identifiers = {item.upper() for item in IDENTIFIER.findall(claim)}
-    status = _status(claim)
-    if not identifiers or status is None:
+                       observed: set[str]) -> str | None:
+    """Flag conflicting comparable facts for one identifier in retrieved sources."""
+    identifiers = _identifiers(claim)
+    if not identifiers:
         return None
-    for citation in sorted(observed - set(cited)):
-        other = _evidence_text(get_evidence(conn, citation))
-        if identifiers & {item.upper() for item in IDENTIFIER.findall(other)} and (
-                other_status := _status(other)) is not None and other_status != status:
-            return f"Conflicting retrieved source for the same identifier: {citation}"
+    status = _status(claim)
+    claim_dates, claim_rest = _date_values(claim)
+    claim_numbers = numbers(IDENTIFIER.sub(" ", claim_rest))
+    relation = _relation_terms(claim)
+    for citation in sorted(observed):
+        for clause in _clauses(_evidence_text(get_evidence(conn, citation))):
+            if not identifiers <= _identifiers(clause):
+                continue
+            other_relation = _relation_terms(clause)
+            shared = relation & other_relation
+            comparable = (not relation or not other_relation or len(shared) >= 2
+                          or (len(relation) == 1 and relation == other_relation))
+            if not comparable:
+                continue
+            other_status = _status(clause)
+            if status is not None and other_status is not None and other_status != status:
+                return f"Conflicting retrieved source for the same identifier: {citation}"
+            other_dates, other_rest = _date_values(clause)
+            other_numbers = numbers(IDENTIFIER.sub(" ", other_rest))
+            if ((claim_dates and other_dates and not claim_dates <= other_dates)
+                    or (claim_numbers and other_numbers and not claim_numbers <= other_numbers)):
+                return f"Conflicting retrieved source for the same identifier: {citation}"
     return None
+
+
+def _explicit_files(question: str, paths: list[str]) -> tuple[set[str], bool]:
+    """Return exact named files and whether any named file was not indexed."""
+    aliases: dict[str, tuple[str, set[str]]] = {}
+    for path in paths:
+        for alias in {path, re.split(r"[/\\]", path)[-1]}:
+            key = alias.casefold()
+            if key not in aliases:
+                aliases[key] = (alias, set())
+            aliases[key][1].add(path)
+    matches: list[tuple[int, int, set[str]]] = []
+    for alias, documents in sorted(aliases.values(), key=lambda item: len(item[0]),
+                                   reverse=True):
+        pattern = re.compile(r"(?<![\w./\\-])" + re.escape(alias) + r"(?![\w./\\-])",
+                             re.IGNORECASE)
+        for match in pattern.finditer(question):
+            start, end = match.span()
+            if not any(start < used_end and used_start < end
+                       for used_start, used_end, _ in matches):
+                matches.append((start, end, documents))
+    # An unknown explicit filename must not leave every indexed file eligible.
+    extensions = re.finditer(r"(?<=[\w)\]])\.(?:pdf|xlsx|xlsm|xls|docx)(?![\w.])",
+                             question, re.IGNORECASE)
+    unknown = any(not any(start <= extension.start() < end for start, end, _ in matches)
+                  for extension in extensions)
+    return {path for _, _, documents in matches for path in documents}, unknown
 
 
 def validate_claims(conn: sqlite3.Connection, raw: str,
@@ -141,9 +264,11 @@ def validate_claims(conn: sqlite3.Connection, raw: str,
                 "answer": "Structured answer unavailable. Inspect the retrieved sources below.",
                 "reason": "Malformed or missing structured answer"}
     allowed = set(observed_citations)
-    named_files = [row["path"] for row in conn.execute("SELECT path FROM documents")
-                   if row["path"].casefold() in question.casefold()]
-    if named_files:
+    named_files, unknown_file = _explicit_files(
+        question, [row["path"] for row in conn.execute("SELECT path FROM documents")])
+    if unknown_file:
+        allowed = set()
+    elif named_files:
         allowed = {cite for cite in allowed if cite.split(" | ")[0] in named_files}
     results: list[dict[str, Any]] = []
     for entry in payload["claims"]:
@@ -179,7 +304,36 @@ def validate_claims(conn: sqlite3.Connection, raw: str,
             citations.append(citation)
             quotes.append(quote)
         if not reason:
-            combined = " ".join(quotes)
+            clauses = _relevant_clauses(claim, quotes)
+            exact = any(normalize(claim) in normalize(quote) for quote in quotes)
+            if not clauses and not exact:
+                reason = "No source clause ties the claimed entity or action to its evidence"
+            elif not clauses:
+                clauses = quotes
+        if not reason:
+            # Values from other clauses must not rescue a wrong entity association.
+            # A coordinated clause with several different values is uncertain
+            # unless the claim repeats exact source wording or names every value.
+            signatures = {_facts(clause) for clause in clauses}
+            claim_dates, claim_without_dates = _date_values(claim)
+            claim_numbers = numbers(claim_without_dates)
+            if not exact and len(signatures) > 1 and (claim_dates or claim_numbers
+                                                       or _status(claim) is not None):
+                reason = "Conflicting facts among relevant source clauses; association is uncertain"
+            elif not exact and len(clauses) == 1:
+                source_dates, source_rest = _date_values(clauses[0])
+                source_numbers = numbers(source_rest)
+                if ((claim_dates and len(source_dates) > 1 and source_dates - claim_dates)
+                        or (claim_numbers and len(source_numbers) > 1
+                            and source_numbers - claim_numbers)):
+                    reason = "Several values share one source clause; association is uncertain"
+            if (not reason and not exact and not claim_dates and not claim_numbers
+                    and _status(claim) is None
+                    and max((len(_anchor_terms(claim) & _anchor_terms(clause))
+                             for clause in clauses), default=0) < 2):
+                reason = "Quote does not establish the claimed action or relationship"
+        if not reason:
+            combined = " ".join(clauses)
             claim_dates, claim_without_dates = _date_values(claim)
             source_dates, source_without_dates = _date_values(combined)
             if not claim_dates.issubset(source_dates):
@@ -191,24 +345,14 @@ def validate_claims(conn: sqlite3.Connection, raw: str,
                     {code.upper() for code in re.findall(
                         r"\b(?:SAR|AED|USD|EUR|GBP)\b", combined, re.IGNORECASE)}):
                 reason = "Currency is absent from supporting quote"
-            elif not {identifier.upper().replace("–", "-").replace("—", "-")
-                      for identifier in IDENTIFIER.findall(claim)}.issubset(
-                    {identifier.upper().replace("–", "-").replace("—", "-")
-                     for identifier in IDENTIFIER.findall(combined)}):
+            elif not _identifiers(claim).issubset(_identifiers(combined)):
                 reason = "Identifier is absent from supporting quote"
             else:
-                reason = _contradiction(claim, quotes) or ""
+                reason = _contradiction(claim, clauses) or ""
             if not reason:
-                claim_terms = {term for term in re.findall(r"[a-z]{3,}", claim.casefold())
-                               if term not in STOPWORDS and term not in CARDINALS}
-                quote_terms = set(re.findall(r"[a-z]{3,}", combined.casefold()))
-                if claim_terms and not claim_terms & quote_terms:
-                    reason = "Quotation has no shared subject or action anchor"
-            if not reason:
-                reason = _external_conflict(conn, claim, citations, allowed) or ""
+                reason = _external_conflict(conn, claim, allowed) or ""
         status = ("unverified" if reason else
-                  "deterministically_verified" if any(normalize(claim) in normalize(q)
-                                                  for q in quotes) else "evidence_linked")
+                  "deterministically_verified" if exact else "evidence_linked")
         results.append({"text": claim, "status": status,
                         "sources": list(dict.fromkeys(citations)) if not reason else [],
                         "quotes": ([{"citation": cite, "quote": quote}

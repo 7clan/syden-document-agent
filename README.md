@@ -108,6 +108,14 @@ exact source quotation for each claim. Python checks that each citation was
 retrieved, resolves at the local index, and contains the quote. It also checks
 comparable numbers (including simple written counts), currencies, identifiers,
 dates expressed with numbers, and explicit decision or negation conflicts.
+For prose with several facts, it compares a claim to the relevant clause or
+clearly separated record. Conflicting values, multiple possible associations,
+or a quotation that shares only a subject noun are marked unverified. A
+negation in an unrelated clause does not invalidate the claim. If a question
+names a file, its full filename is matched case-insensitively, including spaces,
+underscores and hyphens; multiple named files can contribute evidence.
+An explicitly named file absent from the index cannot be replaced by evidence
+from another file.
 The displayed answer is assembled from the claims that pass these checks;
 unsupported claims are omitted and counted. Malformed JSON falls back to
 retrieved source excerpts, clearly labeled unverified.
@@ -128,6 +136,9 @@ Python cannot prove, and **unverified** missing or contradictory support.
 An authentic quote does not make its interpretation true. For example, a
 changed quantity or an approved-versus-proposed claim can be rejected, but
 some subtle semantic errors may remain evidence-linked and need human review.
+Clause boundaries and word-based subject matching are conservative heuristics:
+unusual grammar may cause a supported paraphrase to be omitted, and a plausible
+evidence-linked interpretation is not a proof of the relationship it asserts.
 Tool failures, truncation, and partially indexed files are shown as coverage
 limits. No second model call is made solely to verify a draft answer.
 

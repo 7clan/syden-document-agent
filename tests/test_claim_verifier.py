@@ -218,3 +218,169 @@ def test_claim_statuses_bound_false_acceptance_and_paraphrase_rejection():
     assert (false_acceptances, false_rejections) == (0, 0)
     # A paraphrase is retained, while contradictory pass/fail wording is rejected.
     assert sum(status == "deterministically_verified" for status in outcomes) == 0
+
+
+def test_opposite_decisions_are_tied_to_their_own_identifiers():
+    source = "CO-07 was approved, while CO-08 was rejected."
+    conn, [cite] = _index(("Decisions.pdf", source))
+    claims = [
+        _claim("CO-08 was approved.", (cite, source)),
+        _claim("CO-07 was not approved.", (cite, source)),
+        _claim("CO-07 received approval.", (cite, source)),
+        _claim("CO-08 was rejected.", (cite, source)),
+    ]
+    result = validate_claims(conn, _draft(claims), [cite])
+    assert [item["status"] for item in result["claims"]] == [
+        "unverified", "unverified", "evidence_linked", "deterministically_verified"]
+    assert "CO-08 was approved" not in result["answer"]
+
+
+def test_quantities_follow_entities_even_in_coordinated_clauses():
+    for source in ("Pump A has four units; Pump B has eight units.",
+                   "Pump A has four units and Pump B has eight units."):
+        conn, [cite] = _index(("Inventory.pdf", source))
+        result = validate_claims(conn, _draft([
+            _claim("Pump A has 8 units.", (cite, source)),
+            _claim("Pump A has 4 units.", (cite, source)),
+        ]), [cite])
+        assert [item["status"] for item in result["claims"]] == [
+            "unverified", "evidence_linked"]
+
+
+def test_dates_follow_the_named_obligation():
+    source = ("Design drawings are due 20 May 2027 and equipment delivery "
+              "is due 15 June 2027.")
+    conn, [cite] = _index(("Schedule.pdf", source))
+    result = validate_claims(conn, _draft([
+        _claim("Equipment delivery is due 20 May 2027.", (cite, source)),
+        _claim("Delivery of equipment is due 15 June 2027.", (cite, source)),
+    ]), [cite])
+    assert [item["status"] for item in result["claims"]] == [
+        "unverified", "evidence_linked"]
+
+
+def test_unrelated_negation_does_not_reject_handover_date():
+    source = "The client did not extend the deadline; handover remains 31 March 2027."
+    conn, [cite] = _index(("Terms.pdf", source))
+    result = validate_claims(conn, _draft([
+        _claim("The contractual handover date remains 31 March 2027.", (cite, source)),
+        _claim("The client extended the deadline.", (cite, source)),
+        _claim("The client did not extend the deadline", (cite, source)),
+    ]), [cite])
+    assert [item["status"] for item in result["claims"]] == [
+        "evidence_linked", "unverified", "deterministically_verified"]
+
+
+def test_cherry_picked_quote_cannot_hide_conflicting_entity_in_another_document():
+    conn, (first, second) = _index(
+        ("Minutes.pdf", "PO-15 was approved, while PO-16 was rejected."),
+        ("Revision.pdf", "PO-15 was rejected."),
+    )
+    result = validate_claims(conn, _draft([
+        _claim("PO-15 was approved.",
+               (first, "PO-15 was approved")),
+    ]), [first, second])
+    assert result["status"] == "unverified"
+    assert second in result["claims"][0]["reason"]
+
+
+def test_exact_filename_filter_handles_suffixes_case_and_multiple_documents():
+    conn, (short, long, spaced, hyphen, underscore) = _index(
+        ("Contract.pdf", "Short contract requires inspection."),
+        ("01_Main_Contract.pdf", "Main contract requires drawings."),
+        ("Main Contract.pdf", "Spaced contract requires testing."),
+        ("Change-Order.docx", "Hyphenated order was approved."),
+        ("Change_Order.docx", "Underscore order was rejected."),
+    )
+    wrong = validate_claims(conn, _draft([
+        _claim("Short contract requires inspection.",
+               (short, "Short contract requires inspection.")),
+    ]), [short, long], "What does 01_MAIN_CONTRACT.PDF require?")
+    assert wrong["status"] == "unverified"
+    spaced_wrong = validate_claims(conn, _draft([
+        _claim("Short contract requires inspection.",
+               (short, "Short contract requires inspection.")),
+    ]), [short, spaced], "What does Main Contract.pdf require?")
+    assert spaced_wrong["status"] == "unverified"
+    multiple = validate_claims(conn, _draft([
+        _claim("Short contract requires inspection.",
+               (short, "Short contract requires inspection.")),
+        _claim("Main contract requires drawings.",
+               (long, "Main contract requires drawings.")),
+    ]), [short, long], "Compare Contract.pdf and 01_Main_Contract.pdf")
+    assert multiple["status"] == "deterministically_verified"
+    other = validate_claims(conn, _draft([
+        _claim("Underscore order was rejected.",
+               (underscore, "Underscore order was rejected.")),
+    ]), [hyphen, underscore], "Review Change-Order.docx")
+    assert other["status"] == "unverified"
+    unrestricted = validate_claims(conn, _draft([
+        _claim("Underscore order was rejected.",
+               (underscore, "Underscore order was rejected.")),
+    ]), [hyphen, underscore], "Which order was rejected?")
+    assert unrestricted["status"] == "deterministically_verified"
+    missing = validate_claims(conn, _draft([
+        _claim("Short contract requires inspection.",
+               (short, "Short contract requires inspection.")),
+    ]), [short], "What does Missing-Contract.pdf require?")
+    assert missing["status"] == "unverified"
+
+
+def test_shared_noun_alone_does_not_prove_a_new_relationship():
+    source = "The consultant shall coordinate with the vendor."
+    conn, [cite] = _index(("Scope.pdf", source))
+    result = validate_claims(conn, _draft([
+        _claim("The vendor guarantees installation.", (cite, source)),
+        _claim("The consultant coordinates with the vendor.", (cite, source)),
+    ]), [cite])
+    assert [item["status"] for item in result["claims"]] == [
+        "unverified", "evidence_linked"]
+
+
+def test_nested_file_can_be_named_by_basename_without_matching_another_file():
+    conn, (nested, other) = _index(
+        ("contracts/Final Agreement.pdf", "Delivery requires inspection."),
+        ("Other.pdf", "Delivery requires approval."),
+    )
+    wrong = validate_claims(conn, _draft([
+        _claim("Delivery requires approval.", (other, "Delivery requires approval.")),
+    ]), [nested, other], "What does FINAL AGREEMENT.PDF require?")
+    assert wrong["status"] == "unverified"
+    right = validate_claims(conn, _draft([
+        _claim("Delivery requires inspection.", (nested, "Delivery requires inspection.")),
+    ]), [nested, other], "What does contracts/Final Agreement.pdf require?")
+    assert right["status"] == "deterministically_verified"
+
+
+def test_retrieved_documents_conflict_on_same_record_date_and_quantity():
+    conn, (first, revision, inspection) = _index(
+        ("Plan.pdf", "PO-15 delivery is due 20 May 2027 and PO-15 has four valves."),
+        ("Revision.pdf", "PO-15 delivery is due 21 May 2027; PO-15 has eight valves."),
+        ("Inspection.pdf", "PO-15 inspection is due 15 June 2027."),
+    )
+    for claim, quote in (
+        ("PO-15 delivery is due 20 May 2027", "PO-15 delivery is due 20 May 2027"),
+        ("PO-15 has four valves", "PO-15 has four valves"),
+    ):
+        result = validate_claims(conn, _draft([
+            _claim(claim, (first, quote)),
+        ]), [first, revision, inspection])
+        assert result["status"] == "unverified"
+        assert revision in result["claims"][0]["reason"]
+    unrelated = validate_claims(conn, _draft([
+        _claim("PO-15 inspection is due 15 June 2027",
+               (inspection, "PO-15 inspection is due 15 June 2027")),
+    ]), [first, inspection])
+    assert unrelated["status"] == "deterministically_verified"
+
+
+def test_same_record_can_have_different_decisions_for_different_subjects():
+    source = "PO-15 contract was approved; PO-15 bid was rejected."
+    conn, [cite] = _index(("Decisions.pdf", source))
+    result = validate_claims(conn, _draft([
+        _claim("PO-15 contract was approved", (cite, source)),
+        _claim("PO-15 bid was rejected", (cite, source)),
+        _claim("PO-15 contract was rejected", (cite, source)),
+    ]), [cite])
+    assert [item["status"] for item in result["claims"]] == [
+        "deterministically_verified", "deterministically_verified", "unverified"]
