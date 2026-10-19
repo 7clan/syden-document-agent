@@ -215,6 +215,35 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
     return text
 
 
+def _source_clauses(text: str) -> list[str]:
+    """Rejoin visual PDF line-wraps without merging separate source assertions.
+
+    PDF extraction splits long sentences across physical lines. An item marker,
+    numbered section, or finished sentence starts a new source group; ordinary
+    continuation lines belong to the preceding clause. This is for *indexed
+    evidence only*, never a rewrite of model-generated assertions.
+    """
+    groups: list[str] = []
+    current = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            if current:
+                groups.append(current)
+                current = ""
+            continue
+        bullet = bool(re.match(r"^(?:\(cid:\d+\)|[•●▪])\s*", line))
+        line = re.sub(r"^(?:\(cid:\d+\)|[•●▪])\s*", "", line)
+        heading = bool(re.match(r"^\d+\.\s+[A-Z]", line))
+        if current and (bullet or heading or current.endswith((".", "!", "?"))):
+            groups.append(current)
+            current = ""
+        current = f"{current} {line}".strip()
+    if current:
+        groups.append(current)
+    return [part for group in groups for part in _split_prose(group)]
+
+
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
     """Conservatively match factual claims to cited evidence, including simple paraphrases.
 
@@ -233,7 +262,7 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
     claim = re.sub(r"\b(?:page|chunk|row|paragraph|table)\s+\d+\b", "", claim,
                    flags=re.IGNORECASE)
     claim = re.sub(r"[*`#]", "", claim)
-    evidence_clauses = [part for evidence in evidence_texts for part in _split_prose(evidence)]
+    evidence_clauses = [part for evidence in evidence_texts for part in _source_clauses(evidence)]
 
     def supported(sentence: str) -> bool:
         key_terms = _prose_tokens(sentence)
@@ -283,37 +312,61 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
 
 def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
                        question: str) -> list[str]:
-    """Present concise, verbatim source clauses when a generated summary fails checks.
+    """Rank *actual source clauses* for the question, not PDF title/header text.
 
-    This is extractive rather than a claim that we semantically verified the LLM text.
-    Only source passages resolved in the local index may enter the answer.
+    A failed paraphrase must never be shown as verified. This conservative
+    fallback uses only passages fetched from the local source index.
     """
-    excerpts: list[str] = []
-    scope_question = bool(re.search(r"\b(?:scope|work|obligations?|exclusions?)\b",
-                                    question, re.IGNORECASE))
-    wants_deliverables = bool(re.search(
-        r"\b(?:deliverables?|dates?|deadlines?|milestones?)\b",
-        question, re.IGNORECASE))
+    q = question.lower()
+    asks_exclusion = bool(re.search(r"\b(?:excluded|exclusions?|outside scope)\b", q))
+    asks_scope = bool(re.search(r"\b(?:scope|included work|obligations?)\b", q))
+    asks_cost = bool(re.search(r"\b(?:value|contract sum|amount|price|cost)\b", q))
+    asks_circuits = bool(re.search(r"\b(?:circuits?|inspections?|retests?|passed)\b", q))
+    asks_deadlines = bool(re.search(r"\b(?:deadlines?|deliverables?|handover|dates?)\b", q))
+    question_terms = _prose_tokens(question)
+    candidates: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
     for citation in citations:
         evidence = get_evidence(conn, citation)
         if not ("text" in evidence or "row" in evidence):
             continue
-        for part in _split_prose(_evidence_text(evidence)):
-            is_exclusion = bool(_NEGATIVE_SCOPE.search(part))
-            is_deliverable = bool(re.search(
-                r"\b(?:deliverables?|submit|submission|milestone|due date)\b",
-                part, re.IGNORECASE))
-            if scope_question and not (_POSITIVE_SCOPE.search(part) or is_exclusion):
+        for part in _source_clauses(_evidence_text(evidence)):
+            p = part.strip()
+            words = _prose_tokens(p)
+            if len(words) < 2 or p in seen:
                 continue
-            if scope_question and is_deliverable and not wants_deliverables:
+            seen.add(p)
+            lower = p.lower()
+            exclusion = bool(_NEGATIVE_SCOPE.search(p))
+            deliverable = bool(re.search(r"\b(?:submit|deadline|handover)\b", lower))
+            score = 2 * len(question_terms & words)
+            if asks_exclusion:
+                score += 15 if exclusion else -8
+            if asks_scope:
+                score += 10 if bool(_POSITIVE_SCOPE.search(p)) and not exclusion else -5
+                if "contract scope" in lower or "scope of work" in lower:
+                    score += 1
+            if asks_cost:
+                score += 15 if re.search(r"\b(?:contract value|contract sum|signed contract value)\b",
+                                         lower) else -5
+                score += 4 if re.search(r"\b(?:sar|aed|usd|eur|gbp)\s*[\d,]+", lower) else 0
+            if asks_circuits:
+                score += 12 if "circuit" in lower and re.search(
+                    r"\b(?:pass|passed|retest|retesting|require)\b", lower) else -4
+            if asks_deadlines:
+                score += 10 if deliverable else -3
+            if re.search(r"(?i)^(?:main contract|upgrade|fictional|synthetic test data|"
+                         r"project [\w-]+|reference note)", p):
+                score -= 15
+            if score <= 0:
                 continue
-            label = ("Exclusions" if is_exclusion else
-                     "Deliverables" if is_deliverable else
-                     "Scope of work" if scope_question else "Source evidence")
-            excerpts.append(f"- **{label}:** {part[:300]} — {citation}")
-            if len(excerpts) >= 6:
-                return excerpts
-    return excerpts
+            label = ("Exclusions" if exclusion else
+                     "Deliverables" if deliverable else
+                     "Scope of work" if asks_scope else "Source evidence")
+            candidates.append((score, len(candidates),
+                               f"- **{label}:** {p[:360]} — {citation}"))
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return [line for _, _, line in candidates[:6]]
 
 
 def _question_filter(question: str, original: dict[str, Any]) -> dict[str, Any]:
