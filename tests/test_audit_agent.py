@@ -676,7 +676,7 @@ def test_provider_specific_outline_normalization_does_not_change_gemini():
         conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
         "Summarize the scope of work, including exclusions.", provider="gemini",
     )
-    assert ollama.text == generated
+    assert ollama.text == generated.strip()  # final answers intentionally trim trailing whitespace
     assert gemini.text.startswith("**Verified source excerpts")
     assert ollama.sources == [cite]
     assert gemini.sources == [cite]
