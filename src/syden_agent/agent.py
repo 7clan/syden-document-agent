@@ -441,19 +441,26 @@ def _verified_dates_answer(conn: sqlite3.Connection,
 
 
 _GEMINI_PRESENTATION_INTRO = re.compile(
-    r"(?i)\A\s*based on the indexed project documents,\s*"
-    r"here is the summary of the scope of work,\s*"
-    r"including deliverables and exclusions:\s*\n"
+    r"(?i)\A\s*based on the indexed (?:project )?documents,\s*"
+    r"here is the summary of the scope of work"
+    r"(?:,\s*including deliverables and exclusions| and exclusions):[ \t]*\n"
+)
+_GEMINI_NESTED_SUBMISSION = re.compile(
+    r"(?i),[ \t]+including[ \t]+submitting\b"
 )
 
 
 def _gemini_verification_text(text: str) -> str:
-    """Ignore an exact Gemini presentation preface, not any factual claims.
+    """Normalize two observed Gemini phrasings before shared fact verification.
 
-    Retain the complete original response for display. This adapter is only
-    applied to Gemini; Groq and Ollama retain their existing verification paths.
+    An exact presentation preface makes no factual claim. A separately asserted
+    drawing submission must be checked against its own source clause, rather
+    than combined with the installation clause. Neither transformation drops
+    any substantive action, date, quantity, or exclusion. Other providers are
+    unaffected and the original answer text is retained for display.
     """
-    return _GEMINI_PRESENTATION_INTRO.sub("", text, count=1)
+    claims = _GEMINI_PRESENTATION_INTRO.sub("", text, count=1)
+    return _GEMINI_NESTED_SUBMISSION.sub(". Submit", claims)
 
 
 _OLLAMA_LABEL_ONLY = re.compile(
