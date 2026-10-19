@@ -66,11 +66,19 @@ new multi-file chooser beneath it to add downloaded files without moving them yo
 4. Ask the agent questions normally; no file path is required in the question.
 
 Supported uploads: `.pdf`, `.xlsx`, `.xlsm`, `.xls`, and `.docx`.
-If a filename is already taken, the new file gets a suffix such as `Contract (2).pdf`
-**without overwriting** the original. Unsupported and oversized uploads are refused;
-files that cannot be read are reported by the indexer. Selecting a file in a browser is
-necessary for access to your local Downloads: typing only its filename cannot grant
-browser access to that local file. The old **Index folder** button still works.
+If a selected file has the **same full filename and extension** as one already in
+the selected folder, the app asks whether to **Keep both (rename new file)** or
+**Replace existing file**. The default is Keep both, which creates names such
+as `Contract (2).pdf`. A replacement happens **only after selecting Replace and
+clicking Confirm**, and the index is refreshed so old document content is no
+longer searchable. `mohammad.pdf` and `mohammad.xlsx` are distinct files and
+never overwrite one another. If no filenames collide, upload remains automatic
+after clicking **Open** in the browser file picker.
+
+Unsupported and oversized uploads are refused; files that cannot be read are
+reported by the indexer. Selecting a file in a browser is necessary for access
+to your local Downloads: typing only its filename cannot grant browser access
+to that local file. The old **Index folder** button still works.
 
 ### Choose a provider and model in Streamlit
 
