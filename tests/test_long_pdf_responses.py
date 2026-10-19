@@ -144,3 +144,49 @@ def test_wrong_quantities_and_actions_remain_unverified_after_wrap_normalization
             assert not _supported_prose(conn, wrong, citations), wrong
     finally:
         conn.close()
+
+
+
+def test_contract_sum_paraphrase_and_grounded_sources_footer_pass():
+    conn, citations = _evidence([
+        "1. Parties and project\nThe fictional client appoints a contractor.",
+        ("6. Contract sum\n"
+         "The original signed contract value is SAR 6,750,000. "
+         "This amount includes elements not separately itemized\n"
+         "in the selected-items BOQ."),
+    ])
+    cite = citations[1]
+    try:
+        groq = (
+            "**Original contract value**\n\n"
+            "The main contract states that the original signed contract sum is "
+            f"**SAR\u202f6,750,000**【{cite}】."
+        )
+        ans = _final_answer(
+            conn, groq, [cite], [{"name": "get_evidence", "ok": True}],
+            "What is the original contract value?", provider="groq",
+        )
+        assert ans.text == groq.replace(f"【{cite}】", "")
+        assert ans.sources == [cite]
+
+        gemini = (
+            "The original signed contract value is **SAR 6,750,000**.\n\n"
+            f"Sources:\n- \`{cite}\`"
+        )
+        ans = _final_answer(
+            conn, gemini, [cite], [{"name": "get_evidence", "ok": True}],
+            "What is the original contract value?", provider="gemini",
+        )
+        assert ans.text == gemini
+        assert ans.sources == [cite]
+        for incorrect in (
+            gemini.replace("6,750,000", "6,850,000"),
+            gemini.replace(cite, "NONEXISTENT.pdf | page 3 | chunk 4"),
+        ):
+            failed = _final_answer(
+                conn, incorrect, [cite], [{"name": "get_evidence", "ok": True}],
+                "What is the original contract value?", provider="gemini",
+            )
+            assert "Verified source excerpts" in failed.text
+    finally:
+        conn.close()
