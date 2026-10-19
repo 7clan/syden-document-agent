@@ -242,6 +242,14 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
         written_numbers = set(re.findall(r"[a-z]+", sentence.lower())) & _NUMBER_WORDS
         is_exclusion = bool(_NEGATIVE_SCOPE.search(sentence))
         is_positive = bool(_POSITIVE_SCOPE.search(sentence)) and not is_exclusion
+        # A heading such as "Exclusions:" must not turn "X is included"
+        # into a negative claim that matches the source's "X is excluded".
+        includes_work = bool(re.search(r"\b(?:include|includes|included|including)\b",
+                                       sentence, re.IGNORECASE))
+        negates_inclusion = bool(re.search(r"\b(?:not|never)\s+includ(?:e|ed)\b",
+                                          sentence, re.IGNORECASE))
+        if is_exclusion and includes_work and not negates_inclusion:
+            return False
         for passage in evidence_clauses:
             passage_terms = _prose_tokens(passage)
             if not key_terms or not key_terms.issubset(passage_terms):
