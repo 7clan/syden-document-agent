@@ -598,3 +598,57 @@ def test_latest_ollama_stated_in_heading_keeps_supported_summary():
         assert "Verified source excerpts" in unsafe.text
         assert unsafe.tool_calls[-1]["ok"] is False
     conn.close()
+
+
+def test_ollama_nested_scope_bullets_are_verified_individually():
+    """Real Ollama result: bullets and labels are presentation, not claims."""
+    conn, citation = _contract_evidence()
+    response = (
+        "**Scope of Work (as documented in *Contract.pdf*, page\u202f1)**\n\n"
+        "- **Primary tasks**:\n"
+        "  - Install two transformers.\n"
+        "  - Commission the plant.\n\n"
+        "- **Deliverable**:\n"
+        "  - Submit design drawings by\u202f15\u202fNovember\u202f2026.\n\n"
+        "- **Exclusions**:\n"
+        "  - Civil excavation work is explicitly excluded from this contract.\n\n"
+        "*Source: Contract.pdf \u2013 page\u202f1, chunk\u202f0.*"
+    )
+    answer = _final_answer(
+        conn, response, [citation], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.text == response
+    assert answer.sources == [citation]
+    assert not any(call.get("ok") is False for call in answer.tool_calls)
+    conn.close()
+
+
+def test_ollama_nested_bullets_reject_invented_or_reversed_claims():
+    conn, citation = _contract_evidence()
+    response = (
+        "**Scope of Work (as documented in *Contract.pdf*, page\u202f1)**\n"
+        "- **Primary tasks**:\n"
+        "  - Install two transformers.\n"
+        "  - Commission the plant.\n"
+        "- **Deliverable**:\n"
+        "  - Submit design drawings by 15 November 2026.\n"
+        "- **Exclusions**:\n"
+        "  - Civil excavation work is explicitly excluded from this contract.\n"
+    )
+    unsupported = (
+        response.replace("Install two transformers", "Install three transformers"),
+        response.replace("Commission the plant", "Commission civil excavation"),
+        response.replace("15 November 2026", "16 November 2026"),
+        response.replace("explicitly excluded", "explicitly included"),
+        response + "- **Additional tasks**:\n  - Build a hospital.\n",
+    )
+    for variant in unsupported:
+        assert not _supported_prose(conn, variant, [citation]), variant
+        answer = _final_answer(
+            conn, variant, [citation], [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.",
+        )
+        assert "Verified source excerpts" in answer.text
+        assert variant not in answer.text
+    conn.close()
