@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from openpyxl import Workbook
+from reportlab.pdfgen.canvas import Canvas
 from streamlit.testing.v1 import AppTest
 
 from syden_agent.agent import Answer
@@ -18,6 +19,9 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     sheet.append(["Item", "Total Amount (SAR)", "Due"])
     sheet.append(["Transformer", 1_500_000, "2026-11-15"])
     book.save(tmp_path / "BOQ.xlsx")
+    pdf = Canvas(str(tmp_path / "Contract.pdf"))
+    pdf.drawString(72, 700, "Submit design drawings by 15 November 2026.")
+    pdf.save()
     db_path = tmp_path / "app.db"
     monkeypatch.setenv("SYDEN_DB_PATH", str(db_path))
     app = Path(__file__).resolve().parents[1] / "app.py"
@@ -39,6 +43,8 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     assert page.dataframe
     assert any("Spreadsheet matches" in title.value for title in page.subheader)
     date_result = extract_dates(conn)
+    assert any(isinstance(row["context"], dict) for row in date_result["dates"])
+    assert any(isinstance(row["context"], str) for row in date_result["dates"])
     page.session_state["last_answer"] = Answer(
         "Candidate date", [date_result["dates"][0]["citation"]],
         [{"name": "extract_dates", "args": {}, "ok": True}], date_result,
