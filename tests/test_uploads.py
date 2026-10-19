@@ -101,3 +101,84 @@ def test_uploaded_pdf_excel_word_become_searchable_after_indexing(tmp_path):
             assert any(filename in item["citation"] for item in results), (term, results)
     finally:
         conn.close()
+
+
+
+def test_confirmed_replacement_updates_same_name_without_duplicate(tmp_path):
+    folder = tmp_path / "documents"
+    assert save_uploaded_file(folder, "mohammad.pdf", b"old content", 1024) == "mohammad.pdf"
+    assert save_uploaded_file(
+        folder, "mohammad.pdf", b"updated content", 1024, replace_existing=True,
+    ) == "mohammad.pdf"
+    assert (folder / "mohammad.pdf").read_bytes() == b"updated content"
+    assert [item.name for item in folder.iterdir()] == ["mohammad.pdf"]
+
+
+def test_only_exact_full_filename_can_be_replaced(tmp_path):
+    folder = tmp_path / "documents"
+    save_uploaded_file(folder, "mohammad.pdf", b"original PDF", 1024)
+    save_uploaded_file(folder, "mohammad.xlsx", b"Excel workbook", 1024)
+    save_uploaded_file(
+        folder, "mohammad.pdf", b"updated PDF", 1024, replace_existing=True,
+    )
+    assert (folder / "mohammad.pdf").read_bytes() == b"updated PDF"
+    assert (folder / "mohammad.xlsx").read_bytes() == b"Excel workbook"
+    assert len(list(folder.iterdir())) == 2
+
+
+def test_replacement_requires_existing_target(tmp_path):
+    folder = tmp_path / "documents"
+    with pytest.raises(ValueError, match="Replacement target not found"):
+        save_uploaded_file(
+            folder, "missing.pdf", b"new", 1024, replace_existing=True,
+        )
+    assert not folder.exists()
+
+
+def test_failed_replacement_keeps_original_and_removes_temp_file(tmp_path, monkeypatch):
+    folder = tmp_path / "documents"
+    save_uploaded_file(folder, "Contract.pdf", b"old valid content", 1024)
+
+    def fail_rename(_source, _dest):
+        raise OSError("Simulated rename failure")
+
+    monkeypatch.setattr("syden_agent.uploads.os.replace", fail_rename)
+    with pytest.raises(OSError, match="Simulated rename failure"):
+        save_uploaded_file(
+            folder, "Contract.pdf", b"new content", 1024, replace_existing=True,
+        )
+    assert (folder / "Contract.pdf").read_bytes() == b"old valid content"
+    assert sorted(item.name for item in folder.iterdir()) == ["Contract.pdf"]
+
+
+def test_confirmed_pdf_replacement_refreshes_search_index(tmp_path):
+    from reportlab.pdfgen import canvas
+
+    def make_pdf(sentence):
+        output = io.BytesIO()
+        document = canvas.Canvas(output)
+        document.drawString(55, 750, sentence)
+        document.save()
+        return output.getvalue()
+
+    folder = tmp_path / "documents"
+    save_uploaded_file(
+        folder, "mohammad.pdf", make_pdf("Old deadline 12 December 2026."),
+        10 * 1024 * 1024,
+    )
+    conn = connect(tmp_path / "index.sqlite")
+    try:
+        assert ingest_folder(conn, folder)["indexed"] == 1
+        assert search_documents(conn, "12 December 2026")["total_matches"] == 1
+        save_uploaded_file(
+            folder, "mohammad.pdf", make_pdf("Updated deadline 14 January 2027."),
+            10 * 1024 * 1024, replace_existing=True,
+        )
+        report = ingest_folder(conn, folder)
+        assert report["indexed"] == 1
+        assert report["failed"] == 0
+        assert list_documents(conn)["count"] == 1
+        assert search_documents(conn, "14 January 2027")["total_matches"] == 1
+        assert search_documents(conn, "12 December 2026")["total_matches"] == 0
+    finally:
+        conn.close()
