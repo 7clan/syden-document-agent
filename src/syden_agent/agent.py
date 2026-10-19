@@ -470,6 +470,12 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                                                              for line in excerpts)], trace)
         return Answer("The model's claim could not be verified; "
                       "no passage-level evidence was available.", verified, trace)
+    # Search may return unrelated rows (e.g. an Excel BOQ mentioning transformers
+    # during a contract-scope question). Prefer the model's explicitly cited,
+    # locally resolved locations ONLY if they independently verify every claim.
+    explicit = [cite for cite in verified if cite in text]
+    if explicit and _supported_prose(conn, text, explicit):
+        verified = explicit
     # Provider-specific citation tokens are not source references. Expose only
     # citations resolved from the local index in Answer.sources.
     clean_text = re.sub(r"【[^】]*】", "", text).strip()
