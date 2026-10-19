@@ -91,7 +91,10 @@ def _header(row: dict[str, Any], hint: str, preceding: dict[str, Any] | None = N
                                               ("amount", "cost", "price", "value")):
                 score = 7
             elif (title in {"amount", "total", "line amount", "extended price",
-                            "total cost", "value", "line total"} or title.startswith("amount (")):
+                            "total cost", "value", "line total"} or title.startswith("amount (")
+                  or ("approved" in title and "amount" in title)):
+                # An approved extended amount is a final row total, unlike
+                # "Unit Price" or "Qty"; do not require the model to know its header.
                 score = 6
             elif "extended" in full_title or "line amount" in full_title:
                 score = 5
