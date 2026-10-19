@@ -446,3 +446,32 @@ def test_explicit_citation_does_not_discard_other_required_evidence():
     # A single explicitly cited source cannot support the second obligation.
     assert answer.sources == [contract_cite, annex_cite]
     conn.close()
+
+
+def test_groq_real_heading_and_footer_punctuation_do_not_invalidate_facts():
+    """An exact previously rejected Groq format must retain factual safeguards."""
+    conn, citation = _contract_evidence()
+    response = (
+        "**Scope of Work (as documented in *Contract.pdf*, page\u202f1)**  \n"
+        "- Contractor is responsible for **installing two transformers** and "
+        "**commissioning the plant**.  \n"
+        "- The deliverable required is the **submission of design drawings "
+        "by\u202f15\u202fNovember\u202f2026**.  \n\n"
+        "**Exclusions**  \n"
+        "- **Civil excavation** is explicitly excluded from the contract.  \n\n"
+        "*Source: Contract.pdf \u2013 page\u202f1, chunk\u202f0.*"
+    )
+    assert _supported_prose(conn, response, [citation])
+    answer = _final_answer(
+        conn, response, [citation], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.sources == [citation]
+    assert answer.text == response
+    for altered in (
+        response.replace("two transformers", "three transformers"),
+        response.replace("15\u202fNovember", "16\u202fNovember"),
+        response.replace("is explicitly excluded", "is explicitly included"),
+    ):
+        assert not _supported_prose(conn, altered, [citation])
+    conn.close()
