@@ -7,11 +7,12 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 from dotenv import load_dotenv
 
 from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
+from .semantic_verifier import VERIFIER_SYSTEM, verification_request, verify_judgement
 
 load_dotenv()
 
@@ -593,156 +594,11 @@ def _omit_unverified_completeness(text: str) -> tuple[str, list[str]]:
     return filtered.strip(), [item.strip() for item in omitted]
 
 
-_SMALL_CARDINALS = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
-    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-}
-
-
-def _verified_circuit_counts(conn: sqlite3.Connection, citations: list[str],
-                             question: str) -> Answer | None:
-    """Answer a narrowly stated QA-count question from a single source clause.
-
-    Number words in PDFs differ from model-generated numerals. Only return
-    counts explicitly present together in the same inspection sentence.
-    A document-list citation alone cannot establish either count.
-    """
-    if not re.search(r"(?i)\bhow many circuits\b", question):
-        return None
-    if not re.search(r"(?i)\b(?:pass(?:ed)?|retest(?:ing)?)\b", question):
-        return None
-    for cite in citations:
-        evidence = get_evidence(conn, cite)
-        if "text" not in evidence:
-            continue
-        for clause in _source_clauses(evidence["text"]):
-            match = re.search(
-                r"(?i)\b(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)"
-                r"\s+circuits\s+passed\s+and\s+"
-                r"(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)"
-                r"\s+circuits\s+require\s+retesting\b",
-                clause,
-            )
-            if match is None:
-                continue
-            counts = [
-                int(term) if term.isdigit() else _SMALL_CARDINALS[term.lower()]
-                for term in match.groups()
-            ]
-            return Answer(
-                f"**Inspection results:** {counts[0]} circuits passed; "
-                f"{counts[1]} circuits require retesting.\n\n"
-                f"Source: {cite}",
-                [cite], [],
-            )
-    return None
-
-
-def _verified_explicit_exclusions(conn: sqlite3.Connection,
-                                  citations: list[str], question: str) -> Answer | None:
-    """Answer a narrow exclusions question from actual excluded source clauses.
-
-    A model often writes a heading followed by bare noun bullets, whose
-    exclusion polarity cannot be independently checked by the prose verifier.
-    Only return clauses explicitly marked excluded/not authorized in evidence.
-    """
-    if not re.search(r"(?i)\b(?:which|what)\b.*\bexclud(?:e|es|ed|ing)\b", question):
-        return None
-    items: list[str] = []
-    sources: list[str] = []
-    seen: set[str] = set()
-    for cite in citations:
-        evidence = get_evidence(conn, cite)
-        if "text" not in evidence:
-            continue
-        clauses = _source_clauses(evidence["text"])
-        for index, clause in enumerate(clauses):
-            if not _NEGATIVE_SCOPE.search(clause):
-                continue
-            # Keep scope exclusions, not unrelated statements such as
-            # "no acceptance certificate has been issued".
-            if not re.search(
-                r"(?i)\b(?:exclud(?:e|es|ed|ing)|outside scope|not authorized|no authorization|"
-                r"not part of|no approval)\b", clause
-            ):
-                continue
-            entry = clause
-            if (re.search(r"(?i)\bno authorization\b", clause)
-                    and index and re.search(
-                        r"(?i)\boptional proposal\b", clauses[index - 1]
-                    )):
-                entry = clauses[index - 1] + " " + entry
-            if entry in seen:
-                continue
-            seen.add(entry)
-            items.append(f"- {entry} — {cite}")
-            sources.append(cite)
-    if not items:
-        return None
-    return Answer(
-        "**Explicit exclusions and non-authorized work in the retrieved contract:**\n\n"
-        + "\n".join(items),
-        list(dict.fromkeys(sources)), [],
-    )
-
-
-def _verified_contact_absence(conn: sqlite3.Connection, citations: list[str],
-                              question: str) -> Answer | None:
-    """Only confirm missing architect contact information when explicitly stated."""
-    if not (re.search(r"(?i)\barchitect\b", question)
-            and re.search(r"(?i)\b(?:phone|telephone|contact)\b", question)):
-        return None
-    for cite in citations:
-        evidence = get_evidence(conn, cite)
-        if "text" not in evidence:
-            continue
-        for clause in _source_clauses(evidence["text"]):
-            if (re.search(r"(?i)\barchitect contact details\b", clause)
-                    and re.search(r"(?i)\bhave not included\b", clause)):
-                return Answer(
-                    "**The architect's phone number is not provided.**\n\n"
-                    f"The contract states: “{clause}” — {cite}",
-                    [cite], [],
-                )
-    return None
-
-
-def _verified_change_order_extension(conn: sqlite3.Connection,
-                                     citations: list[str],
-                                     question: str) -> Answer | None:
-    """Resolve an approved change-order work-and-extension question from its clauses."""
-    if not (re.search(r"(?i)\bchange order\b", question)
-            and re.search(r"(?i)\b(?:extend|extension)\b", question)
-            and re.search(r"(?i)\b(?:work|authoriz(?:e|ed))\b", question)):
-        return None
-    for cite in citations:
-        evidence = get_evidence(conn, cite)
-        if "text" not in evidence:
-            continue
-        clauses = _source_clauses(evidence["text"])
-        work = next((piece for piece in clauses if re.search(
-            r"(?i)\b(?:authorizes|authorised|authorized)\b", piece
-        ) and re.search(r"(?i)\badditional\b", piece)), None)
-        extension = next((piece for piece in clauses if re.search(
-            r"(?i)\bdoes not grant an extension\b", piece
-        )), None)
-        date_clause = next((piece for piece in clauses if re.search(
-            r"(?i)\bdeadline remains\b.*\b\d{4}\b", piece
-        )), None)
-        if work and extension and date_clause:
-            return Answer(
-                "**Approved additional work:** " + work + "\n\n"
-                "**Schedule:** " + extension + " " + date_clause
-                + f"\n\nSource: {cite}",
-                [cite], [],
-            )
-    return None
-
-
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
-                  date_called: bool = False, provider: str = "") -> Answer:
+                  date_called: bool = False, provider: str = "",
+                  semantic_checker: Callable[[str, str, dict[str, str]], Any] | None = None) -> Answer:
     verified = _verified_sources(conn, citations)
     # Prefer evidence locations to file-list entries when both were retrieved.
     # A document-level citation confirms existence, not the factual statement.
@@ -764,12 +620,6 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
-    for direct in (_verified_circuit_counts, _verified_explicit_exclusions,
-                   _verified_contact_absence, _verified_change_order_extension):
-        answer = direct(conn, verified, question)
-        if answer is not None:
-            answer.tool_calls = trace
-            return answer
     display_text, omitted_completeness = _omit_unverified_completeness(text)
     if provider == "gemini":
         verified_text = _gemini_verification_text(display_text)
@@ -777,9 +627,42 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         verified_text = _ollama_verification_text(display_text)
     else:
         verified_text = display_text
-    if not _supported_prose(conn, verified_text, verified):
-        # Store the rejected response in the local audit trail for diagnosis; never
-        # present its unsupported claims as verified evidence.
+    accepted = _supported_prose(conn, verified_text, verified)
+    if not accepted and semantic_checker is not None:
+        # Evidence-bound semantic verification is a second pass only for text
+        # the conservative lexical verifier cannot recognize. It is not used
+        # for spreadsheet totals, exhaustive date inventories, or file-only refs.
+        evidence = {
+            cite: _evidence_text(get_evidence(conn, cite))
+            for cite in verified if not cite.endswith(" | document")
+        }
+        evidence = {cite: snippet for cite, snippet in evidence.items() if snippet}
+        if evidence:
+            stripped_claims = _strip_provenance_markup(verified_text, verified)
+            for cite in verified:
+                stripped_claims = stripped_claims.replace(cite, "")
+                stripped_claims = stripped_claims.replace(cite.split(" | ")[0], "")
+            stripped_claims = re.sub(
+                r"\b(?:page|chunk|row|paragraph|table)\s+\d+\b", "",
+                stripped_claims, flags=re.IGNORECASE,
+            )
+            try:
+                verdict = semantic_checker(question, verified_text, evidence)
+                accepted, supporting = verify_judgement(
+                    verdict, evidence, stripped_claims,
+                )
+            except Exception:  # noqa: BLE001 - fail closed on provider errors
+                accepted, supporting = False, []
+            if accepted:
+                verified = supporting
+                trace = [*trace, {
+                    "name": "semantic_verification", "ok": True,
+                    "reason": "All claims supported by checked source quotes",
+                    "supporting_citations": supporting,
+                }]
+    if not accepted:
+        # Failed lexical AND semantic verification: never display an unsupported
+        # paraphrase as fact. Fallback quotes are drawn only from local sources.
         trace = [*trace, {"name": "answer_verification", "ok": False,
                          "reason": "Model prose did not pass source-clause verification",
                          "generated_text_preview": text[:1200]}]
