@@ -85,7 +85,9 @@ def test_streamlit_selector_switches_provider_and_model(monkeypatch, tmp_path):
     assert not page.exception
     assert page.sidebar.selectbox[1].value == "my-configured-groq-model"
     page.text_area[0].set_value("Summarize this document").run()
-    page.button[-1].click().run()
+    ask_button = next(button for button in page.button if button.label == "Ask agent")
+    assert not ask_button.disabled, "Groq Ask button should be enabled with a configured key"
+    ask_button.click().run()
     assert not page.exception
     assert calls == [("Summarize this document", "groq", "my-configured-groq-model")]
 
@@ -93,5 +95,5 @@ def test_streamlit_selector_switches_provider_and_model(monkeypatch, tmp_path):
     assert not page.exception
     # Switching models clears the previously generated answer instead of relabeling it.
     assert "last_answer" not in page.session_state
-    page.button[-1].click().run()
+    next(button for button in page.button if button.label == "Ask agent").click().run()
     assert calls[-1] == ("Summarize this document", "groq", "openai/gpt-oss-20b")
