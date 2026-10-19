@@ -215,41 +215,6 @@ def _strip_provenance_markup(text: str, citations: list[str]) -> str:
     return text
 
 
-_RESPONSE_SECTIONS = re.compile(
-    r"(?:scope(?: of work)?|exclusions?|deliverables?|included work|outside scope)",
-    re.IGNORECASE,
-)
-_RESPONSE_SUBHEADINGS = re.compile(
-    r"(?:primary|key|main) (?:tasks|activities|work)|tasks|activities|deliverables?",
-    re.IGNORECASE,
-)
-
-
-def _response_claims(text: str) -> list[str]:
-    """Extract asserted clauses from prose and nested Markdown bullet outlines.
-
-    Heading labels are not claims. Unsupported substantive content is never
-    silently dropped: it remains a clause and must match a source passage.
-    """
-    result: list[str] = []
-    section = ""
-    for line in text.splitlines():
-        stripped = line.strip(" \t-*#:`  \r")
-        if not stripped:
-            continue
-        if _RESPONSE_SECTIONS.fullmatch(stripped):
-            section = f"{stripped}: "
-            continue
-        if _RESPONSE_SUBHEADINGS.fullmatch(stripped) and re.search(
-                r":\s*$", line):
-            continue
-        for sentence in _split_prose(stripped):
-            if _PRESENTATION_PREFACE.fullmatch(sentence.strip()):
-                continue
-            result.extend(_split_coordinated_claims(section + sentence))
-    return result
-
-
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
     """Conservatively match factual claims to cited evidence, including simple paraphrases.
 
@@ -307,10 +272,12 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
             return True
         return False
 
-    # Parse Markdown structure before facts: a nested "Primary tasks:" bullet is
-    # a label, not a contract assertion. Preserve its surrounding section so a
-    # short "Civil excavation" bullet under Exclusions is still checked as negative.
-    sentences = _response_claims(claim)
+    # Check substantive clauses against their indexed source passages.
+    sentences = [
+        atom for sentence in _split_prose(claim)
+        if not _PRESENTATION_PREFACE.fullmatch(sentence.strip())
+        for atom in _split_coordinated_claims(sentence)
+    ]
     return bool(sentences) and all(supported(sentence) for sentence in sentences)
 
 
@@ -473,6 +440,22 @@ def _verified_dates_answer(conn: sqlite3.Connection,
                   trace, result)
 
 
+_OLLAMA_LABEL_ONLY = re.compile(
+    r"(?im)^[ \t]*[-*][ \t]+(?:[*_]{0,2})"
+    r"(?:primary tasks|key tasks|main tasks|activities)"
+    r"(?:[*_]{0,2}):[ \t]*$"
+)
+
+
+def _ollama_verification_text(text: str) -> str:
+    """Discard only standalone outline labels from Ollama's verification view.
+
+    Preserve the original answer for display, and never strip a factual clause.
+    Other providers continue through the original verifier unchanged.
+    """
+    return _OLLAMA_LABEL_ONLY.sub("", text)
+
+
 _UNVERIFIED_COMPLETENESS = re.compile(
     r"(?im)^[ \t]*no[ \t]+(?:other|additional)[ \t]+[^\n.]+?"
     r"[ \t]+(?:was|were|have[ \t]+been)[ \t]+(?:found|identified|listed)"
@@ -496,7 +479,7 @@ def _omit_unverified_completeness(text: str) -> tuple[str, list[str]]:
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
-                  date_called: bool = False) -> Answer:
+                  date_called: bool = False, provider: str = "") -> Answer:
     verified = _verified_sources(conn, citations)
     # Prefer evidence locations to file-list entries when both were retrieved.
     # A document-level citation confirms existence, not the factual statement.
@@ -518,7 +501,9 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
-    verified_text, omitted_completeness = _omit_unverified_completeness(text)
+    display_text, omitted_completeness = _omit_unverified_completeness(text)
+    verified_text = (_ollama_verification_text(display_text)
+                     if provider == "ollama_cloud" else display_text)
     if not _supported_prose(conn, verified_text, verified):
         # Store the rejected response in the local audit trail for diagnosis; never
         # present its unsupported claims as verified evidence.
@@ -549,7 +534,7 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                          "omitted_claims": omitted_completeness}]
     # Provider-specific citation tokens are not source references. Expose only
     # citations resolved from the local index in Answer.sources.
-    clean_text = re.sub(r"【[^】]*】", "", verified_text).strip()
+    clean_text = re.sub(r"【[^】]*】", "", display_text).strip()
     if omitted_completeness:
         clean_text += ("\n\n*Only the retrieved evidence is summarized; "
                        "complete coverage was not established.*")
@@ -703,7 +688,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 messages.append({"role": "user", "content": "Call extract_dates before answering."})
                 continue
             return _final_answer(conn, text, citations, trace, question, numeric_args,
-                                 _has_dates_result(trace))
+                                 _has_dates_result(trace), provider=provider)
         messages.append(msg.model_dump(exclude_none=True))
         for call in msg.tool_calls:
             try:
