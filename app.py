@@ -156,6 +156,8 @@ with st.sidebar:
 
 question = st.text_area("Ask a question about the indexed documents",
                         placeholder="List all total cost items above SAR 1 million across the BOQs")
+st.caption("Questions are independent: include the filename, threshold, or item selection "
+           "instead of referring to 'those items' from an earlier answer.")
 if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
              type="primary"):
     with st.spinner("Analyzing evidence..."):
