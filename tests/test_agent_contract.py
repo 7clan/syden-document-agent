@@ -1,0 +1,126 @@
+"""Tests the deterministic agent contract without making provider API requests."""
+
+import sys
+from types import SimpleNamespace
+
+from syden_agent.agent import (
+    _ask_openai,
+    _collect_citations,
+    _compatible_config,
+    _execute,
+    _final_answer,
+    _needs_numeric_query,
+)
+from syden_agent.db import connect
+from syden_agent.tools import TOOL_SCHEMAS, _num
+
+
+def test_document_tools_are_allowlisted():
+    conn = connect(":memory:")
+    assert "error" in _execute(conn, "run_shell", {"command": "dir"})
+    assert "documents" in _execute(conn, "list_documents", {})
+    assert "error" in _execute(conn, "query_spreadsheet", {"operator": "DROP TABLE"})
+
+
+def test_currency_numbers():
+    assert str(_num("SAR 1,250,000.50")) == "1250000.50"
+    assert str(_num("(5,000)")) == "-5000"
+    assert _num("N/A") is None
+
+
+def test_collect_citations_from_real_tool_results():
+    data = {"matches": [{"citation": "contract.pdf | page 1 | chunk 0"}]}
+    assert _collect_citations(data) == ["contract.pdf | page 1 | chunk 0"]
+
+
+def test_hosted_llama_provider_configuration(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-only-not-real")
+    monkeypatch.delenv("GROQ_MODEL", raising=False)
+    monkeypatch.delenv("GROQ_BASE_URL", raising=False)
+    key, model, url = _compatible_config("groq")
+    assert key == "test-only-not-real"
+    assert model == "llama-3.3-70b-versatile"
+    assert url == "https://api.groq.com/openai/v1"
+
+
+def test_other_llama_host_requires_configuration(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("COMPATIBLE_API_KEY", "test-only-not-real")
+    monkeypatch.setenv("COMPATIBLE_MODEL", "some-provider-model")
+    monkeypatch.delenv("COMPATIBLE_BASE_URL", raising=False)
+    with pytest.raises(ValueError, match="COMPATIBLE_BASE_URL"):
+        _compatible_config("compatible")
+
+
+def test_ollama_cloud_has_separate_credentials_and_requires_model(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-only-not-real")
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    with pytest.raises(ValueError, match="OLLAMA_MODEL"):
+        _compatible_config("ollama_cloud")
+    monkeypatch.setenv("OLLAMA_MODEL", "candidate-model")
+    key, model, url = _compatible_config("ollama_cloud")
+    assert (key, model, url) == ("test-only-not-real", "candidate-model", "https://ollama.com/v1")
+
+
+def test_agent_rejects_provider_text_without_verified_evidence():
+    conn = connect(":memory:")
+    no_call = _final_answer(conn, "Invented answer", [], [])
+    assert "Invented answer" not in no_call.text
+    invalid_cite = _final_answer(conn, "Invented answer", ["fake.pdf | page 1 | chunk 0"],
+                                 [{"name": "search_documents"}])
+    assert "Invented answer" not in invalid_cite.text
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('real.pdf','pdf','ready')")
+    cite = "real.pdf | document"
+    valid = _final_answer(conn, "Indexed real.pdf", [cite], [{"name": "list_documents"}])
+    assert valid.sources == [cite]
+
+
+def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkeypatch):
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('smoke.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'Synthetic code ORCHID-7429')")
+    messages_seen = []
+    tool_message = SimpleNamespace(
+        tool_calls=[SimpleNamespace(id="call_1", function=SimpleNamespace(
+            name="search_documents", arguments='{"query":"ORCHID-7429"}'))],
+        content=None,
+        model_dump=lambda exclude_none: {"role": "assistant", "tool_calls": []},
+    )
+    final_message = SimpleNamespace(tool_calls=None, content="The code is ORCHID-7429.")
+    responses = [SimpleNamespace(choices=[SimpleNamespace(message=tool_message)]),
+                 SimpleNamespace(choices=[SimpleNamespace(message=final_message)])]
+
+    def create(**kwargs):
+        messages_seen.append(kwargs["messages"][:])
+        return responses.pop(0)
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: fake_client))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
+    answer = _ask_openai(conn, "What is the synthetic code?", 3)
+    assert answer.text == "The code is ORCHID-7429."
+    assert answer.sources == ["smoke.pdf | page 1 | chunk 0"]
+    assert answer.tool_calls[0]["name"] == "search_documents"
+    assert messages_seen[1][-1]["role"] == "tool"
+
+
+def test_gemini_sdk_accepts_local_tool_declarations():
+    from google.genai import types
+
+    declarations = [types.FunctionDeclaration(name=tool["name"],
+                    description=tool["description"],
+                    parameters_json_schema=tool["parameters"]) for tool in TOOL_SCHEMAS]
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(function_declarations=declarations)],
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+    assert len(config.tools[0].function_declarations) == len(TOOL_SCHEMAS)
+
+
+def test_boq_threshold_questions_require_numeric_tool():
+    assert _needs_numeric_query("List all BOQ cost items above SAR 1 million")
+    assert not _needs_numeric_query("Summarize the scope of work in the contract")
