@@ -475,3 +475,84 @@ def test_groq_real_heading_and_footer_punctuation_do_not_invalidate_facts():
     ):
         assert not _supported_prose(conn, altered, [citation])
     conn.close()
+
+
+def test_latest_gemini_additionally_and_bracket_citations_pass():
+    conn, cite = _contract_evidence()
+    generated = (
+        "Based on the indexed documents, the scope of work and exclusions "
+        "are as follows:\n\n"
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission the plant. Additionally, the Contractor is required "
+        "to submit design drawings by 15 November 2026 "
+        "[Contract.pdf | page 1 | chunk 0].\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract "
+        "[Contract.pdf | page 1 | chunk 0]."
+    )
+    assert _supported_prose(conn, generated, [cite])
+    answer = _final_answer(
+        conn, generated, [cite],
+        [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.text == generated
+    assert answer.sources == [cite]
+    assert not any(not event.get("ok", True) for event in answer.tool_calls)
+    conn.close()
+
+
+def test_latest_ollama_removes_unsupported_completeness_only():
+    conn, cite = _contract_evidence()
+    generated = (
+        "**Scope of Work (as documented in *Contract.pdf*, page\u202f1)**  \n"
+        "- Contractor is responsible for **installing two transformers** "
+        "and **commissioning the plant**.  \n"
+        "- **Deliverable**: Submit design drawings by "
+        "**15\u202fNovember\u202f2026**.  \n\n"
+        "**Exclusions**  \n"
+        "- **Civil excavation** is explicitly excluded from the contract.  \n\n"
+        "No other scope or exclusion clauses were found in the indexed documents."
+    )
+    answer = _final_answer(
+        conn, generated, [cite],
+        [{"name": "search_documents", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert "installing two transformers" in answer.text
+    assert "Civil excavation" in answer.text
+    assert "15\u202fNovember\u202f2026" in answer.text
+    assert "No other scope or exclusion clauses" not in answer.text
+    assert "complete coverage was not established" in answer.text
+    assert "Verified source excerpts" not in answer.text
+    assert answer.sources == [cite]
+    audit = answer.tool_calls[-1]
+    assert audit["name"] == "answer_verification"
+    assert audit["ok"] is True
+    assert "No other scope" in audit["omitted_claims"][0]
+    conn.close()
+
+
+def test_completeness_filter_never_masks_wrong_facts():
+    conn, cite = _contract_evidence()
+    footer = "\nNo other scope or exclusion clauses were found in the indexed documents."
+    for claim in (
+        "The contractor shall install three transformers.",
+        "Civil excavation is included.",
+        "Submit design drawings by 16 November 2026.",
+    ):
+        answer = _final_answer(
+            conn, claim + footer, [cite],
+            [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.",
+        )
+        assert "Verified source excerpts" in answer.text
+        assert claim not in answer.text
+        assert answer.tool_calls[-1]["ok"] is False
+    # A bare unsupported absence assertion must not be treated as evidence.
+    alone = _final_answer(
+        conn, footer.strip(), [cite],
+        [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert "Verified source excerpts" in alone.text
+    conn.close()
