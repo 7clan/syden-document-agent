@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.local/
+.streamlit/secrets.toml
+# Never commit confidential project documents.
+documents/
+uploads/
+*.pdf
+*.xlsx
+*.xlsm
+*.xls
+*.xlsb
+*.docx
+!sample_documents/.gitkeep
+.DS_Store
