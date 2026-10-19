@@ -172,7 +172,7 @@ def test_contract_sum_paraphrase_and_grounded_sources_footer_pass():
 
         gemini = (
             "The original signed contract value is **SAR 6,750,000**.\n\n"
-            f"Sources:\n- \`{cite}\`"
+            f"Sources:\n- `{cite}`"
         )
         ans = _final_answer(
             conn, gemini, [cite], [{"name": "get_evidence", "ok": True}],
