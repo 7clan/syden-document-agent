@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import syden_agent.agent as agent
+from syden_agent import agent
 from syden_agent.agent import Answer, _compatible_config
 from syden_agent.db import connect
 
