@@ -681,3 +681,71 @@ def test_provider_specific_outline_normalization_does_not_change_gemini():
     assert ollama.sources == [cite]
     assert gemini.sources == [cite]
     conn.close()
+
+
+
+def test_live_gemini_deliverables_preface_is_presentation_only():
+    """Exact live Gemini failure: a boilerplate introduction is not a claim."""
+    conn, cite = _contract_evidence()
+    generated = (
+        "Based on the indexed project documents, here is the summary of the "
+        "scope of work, including deliverables and exclusions:\n\n"
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission the plant (*Contract.pdf | page 1 | chunk 0*).\n"
+        "* **Deliverable:** Submit design drawings by 15 November 2026 "
+        "(*Contract.pdf | page 1 | chunk 0*).\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract "
+        "(*Contract.pdf | page 1 | chunk 0*)."
+    )
+    result = _final_answer(
+        conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.", provider="gemini",
+    )
+    assert result.text == generated
+    assert result.sources == [cite]
+    assert not any(call.get("ok") is False for call in result.tool_calls)
+    # Provider isolation: this normalization must not apply to Groq/Ollama.
+    for provider in ("groq", "ollama_cloud"):
+        unchanged = _final_answer(
+            conn, generated, [cite], [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.", provider=provider,
+        )
+        assert "Verified source excerpts" in unchanged.text
+    conn.close()
+
+
+def test_gemini_preface_handling_cannot_hide_unsupported_contract_claims():
+    conn, cite = _contract_evidence()
+    intro = (
+        "Based on the indexed project documents, here is the summary of the "
+        "scope of work, including deliverables and exclusions:\n\n"
+    )
+    supported = (
+        "* **Scope of Work:** The Contractor shall install two transformers "
+        "and commission the plant.\n"
+        "* **Deliverable:** Submit design drawings by 15 November 2026.\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract."
+    )
+    for fabricated in (
+        supported.replace("two transformers", "three transformers"),
+        supported.replace("15 November 2026", "16 November 2026"),
+        supported.replace("is excluded", "is included"),
+        supported + "\n* **Scope of Work:** Build a hospital.",
+    ):
+        rejected = _final_answer(
+            conn, intro + fabricated, [cite], [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.", provider="gemini",
+        )
+        assert "Verified source excerpts" in rejected.text
+        assert rejected.tool_calls[-1]["ok"] is False
+    # Never suppress new, substantive language appended to the introduction.
+    unrecognized_intro = intro.replace(
+        "including deliverables and exclusions:",
+        "including deliverables, exclusions, and a new hospital project:",
+    )
+    assert _final_answer(
+        conn, unrecognized_intro + supported, [cite],
+        [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.", provider="gemini",
+    ).tool_calls[-1]["ok"] is False
+    conn.close()
