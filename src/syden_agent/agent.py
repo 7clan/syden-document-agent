@@ -347,9 +347,10 @@ def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
                 continue
             score = 2 * len(question_terms & words)
             if asks_exclusion:
-                score += 15 if exclusion else -8
+                score += 15 if exclusion else (-8 if not asks_scope else 0)
             if asks_scope:
-                score += 10 if bool(_POSITIVE_SCOPE.search(p)) and not exclusion else -5
+                score += (10 if bool(_POSITIVE_SCOPE.search(p)) and not exclusion
+                          else (-5 if not asks_exclusion else 0))
                 if "contract scope" in lower or "scope of work" in lower:
                     score += 1
             if asks_cost:
@@ -360,7 +361,7 @@ def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
                 score += 12 if "circuit" in lower and re.search(
                     r"\b(?:pass|passed|retest|retesting|require)\b", lower) else -4
             if asks_deadlines:
-                score += 10 if deliverable else -3
+                score += 10 if deliverable else (-3 if not asks_scope else 0)
             if re.search(r"(?i)^(?:main contract|upgrade|fictional|synthetic test data|"
                          r"project [\w-]+|reference note)", p):
                 score -= 15
