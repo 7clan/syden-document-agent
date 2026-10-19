@@ -397,3 +397,52 @@ def test_citation_decoration_cannot_hide_invented_work_or_wrong_dates():
         candidate = intro + wrong + "\n*Source: Contract.pdf, page 1, chunk 0.*"
         assert not _supported_prose(conn, candidate, [cite]), wrong
     conn.close()
+
+
+def test_explicit_contract_citation_omits_unrelated_search_hit():
+    conn, contract_cite = _contract_evidence()
+    conn.execute("INSERT INTO documents(path,kind,status) "
+                 "VALUES('BOQ.xlsx','xlsx','ready')")
+    conn.execute("INSERT INTO sheet_rows(document_id,sheet,row_num,cells_json) "
+                 "VALUES(2,'Electrical BOQ',2,?)", (
+                     '{"A":{"value":"EL-01"},"B":{"value":"Transformers"},'
+                     '"C":{"value":1500000}}',))
+    boq_cite = "BOQ.xlsx | Electrical BOQ | row 2"
+    response = (
+        "The scope of work includes the installation of two transformers and "
+        "commissioning of the plant. The contractor is also required to submit "
+        "design drawings by 15 November 2026.\n\n"
+        "Civil excavation is excluded from this contract.\n\n"
+        "Source: Contract.pdf | page 1 | chunk 0"
+    )
+    answer = _final_answer(
+        conn, response, [contract_cite, boq_cite],
+        [{"name": "search_documents", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.text == response
+    assert answer.sources == [contract_cite]
+    conn.close()
+
+
+def test_explicit_citation_does_not_discard_other_required_evidence():
+    conn, contract_cite = _contract_evidence()
+    conn.execute("INSERT INTO documents(path,kind,status) "
+                 "VALUES('Annex.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(2,1,0,'Contractor shall inspect a generator.')")
+    annex_cite = "Annex.pdf | page 1 | chunk 0"
+    response = (
+        "The contractor shall install two transformers. "
+        "The contractor shall inspect a generator.\n"
+        "Source: Contract.pdf | page 1 | chunk 0"
+    )
+    answer = _final_answer(
+        conn, response, [contract_cite, annex_cite],
+        [{"name": "search_documents", "ok": True}],
+        "Summarize the obligations.",
+    )
+    assert answer.text == response
+    # A single explicitly cited source cannot support the second obligation.
+    assert answer.sources == [contract_cite, annex_cite]
+    conn.close()
