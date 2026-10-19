@@ -638,6 +638,75 @@ def _verified_circuit_counts(conn: sqlite3.Connection, citations: list[str],
     return None
 
 
+def _verified_explicit_exclusions(conn: sqlite3.Connection,
+                                  citations: list[str], question: str) -> Answer | None:
+    """Answer a narrow exclusions question from actual excluded source clauses.
+
+    A model often writes a heading followed by bare noun bullets, whose
+    exclusion polarity cannot be independently checked by the prose verifier.
+    Only return clauses explicitly marked excluded/not authorized in evidence.
+    """
+    if not re.search(r"(?i)\b(?:which|what)\b.*\bexclud(?:e|es|ed|ing)\b", question):
+        return None
+    items: list[str] = []
+    sources: list[str] = []
+    seen: set[str] = set()
+    for cite in citations:
+        evidence = get_evidence(conn, cite)
+        if "text" not in evidence:
+            continue
+        clauses = _source_clauses(evidence["text"])
+        for index, clause in enumerate(clauses):
+            if not _NEGATIVE_SCOPE.search(clause):
+                continue
+            # Keep scope exclusions, not unrelated statements such as
+            # "no acceptance certificate has been issued".
+            if not re.search(
+                r"(?i)\b(?:exclud|outside scope|not authorized|no authorization|"
+                r"not part of|no approval)\b", clause
+            ):
+                continue
+            entry = clause
+            if (re.search(r"(?i)\bno authorization\b", clause)
+                    and index and re.search(
+                        r"(?i)\boptional proposal\b", clauses[index - 1]
+                    )):
+                entry = clauses[index - 1] + " " + entry
+            if entry in seen:
+                continue
+            seen.add(entry)
+            items.append(f"- {entry} — {cite}")
+            sources.append(cite)
+    if not items:
+        return None
+    return Answer(
+        "**Explicit exclusions and non-authorized work in the retrieved contract:**\n\n"
+        + "\n".join(items),
+        list(dict.fromkeys(sources)), [],
+    )
+
+
+def _verified_contact_absence(conn: sqlite3.Connection, citations: list[str],
+                              question: str) -> Answer | None:
+    """Only confirm missing architect contact information when explicitly stated."""
+    if not (re.search(r"(?i)\barchitect\b", question)
+            and re.search(r"(?i)\b(?:phone|telephone|contact)\b", question)):
+        return None
+    for cite in citations:
+        evidence = get_evidence(conn, cite)
+        if "text" not in evidence:
+            continue
+        for clause in _source_clauses(evidence["text"]):
+            if (re.search(r"(?i)\barchitect contact details\b", clause)
+                    and re.search(r"(?i)\bhave not included\b", clause)):
+                return Answer(
+                    "**The architect's phone number is not provided.**\n\n"
+                    f"The contract states: “{clause}” — {cite}",
+                    [cite], [],
+                )
+    return None
+
+
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
@@ -663,10 +732,12 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
-    qa = _verified_circuit_counts(conn, verified, question)
-    if qa is not None:
-        qa.tool_calls = trace
-        return qa
+    for direct in (_verified_circuit_counts, _verified_explicit_exclusions,
+                   _verified_contact_absence):
+        answer = direct(conn, verified, question)
+        if answer is not None:
+            answer.tool_calls = trace
+            return answer
     display_text, omitted_completeness = _omit_unverified_completeness(text)
     if provider == "gemini":
         verified_text = _gemini_verification_text(display_text)
