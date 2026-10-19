@@ -112,6 +112,7 @@ _PROSE_FILLER = {
     "requires", "required", "responsible", "must", "shall", "will", "should",
     "perform", "performed", "undertake", "undertaken", "carry", "out", "do",
     "main", "also", "such", "like", "specific", "exact", "wording", "verbatim",
+    "explicitly",
     "below", "above", "here", "there", "both", "only", "same", "details",
     "each", "all", "some", "part", "parts", "item", "items", "namely",
     "deliverable", "excluded", "exclude", "not", "never", "no", "without",
@@ -166,16 +167,47 @@ def _split_coordinated_claims(clause: str) -> list[str]:
     clauses to manufacture a new action/object or change an exclusion.
     """
     return [part.strip() for part in re.split(
-        r"(?i)\s*,?\s*\band\s+(?=(?:install|commission|submit|deliver|provide|"
-        r"construct|build|perform|undertake)(?:s|ed|ing)?\b)", clause
+        r"(?i)\s*(?:,?\s*\band\s+|\balong\s+with\s+)"
+        r"(?=(?:install|commission|submit|deliver|provide|construct|build|perform|"
+        r"undertake)(?:s|ed|ing|ted|ting)?\b)", clause
     ) if part.strip()]
 
 
 _PRESENTATION_PREFACE = re.compile(
     r"(?i)^based on (?:the )?(?:indexed|provided|retrieved) "
     r"(?:project )?documents?\s*(?:\(\s*\))?\s*,?\s*"
-    r"the scope of work and exclusions are as follows\s*:?\s*$"
+    r"(?:the scope of work and exclusions are as follows|"
+    r"here is the summary of the scope of work and its exclusions)\s*:?\s*$"
 )
+
+
+def _strip_provenance_markup(text: str, citations: list[str]) -> str:
+    """Discard display-only source labels when they match an indexed citation.
+
+    Never strip arbitrary prose: only exact citation decorations/footers are
+    removed. All remaining sentences must pass factual checks.
+    """
+    text = text.replace("\u00a0", " ").replace("\u202f", " ")
+    for citation in citations:
+        filename = re.escape(citation.split(" | ")[0])
+        text = re.sub(rf"\(\s*`?{re.escape(citation)}`?\s*\)", "", text)
+        # Model-added references in Markdown headings and inline notes.
+        text = re.sub(
+            rf"\(\s*{filename}\s*[–—-]\s*page\s+\d+\s*\)", "",
+            text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"\(\s*\*?\s*Source:\s*{filename}\s*\|\s*page\s+\d+"
+            rf"\s*\|\s*chunk\s+\d+\s*\*?\s*\)", "",
+            text, flags=re.IGNORECASE,
+        )
+        # Keep the footer if there is any additional unsupported text on it.
+        text = "\n".join(line for line in text.split("\n") if not re.fullmatch(
+            rf"\s*\*?\s*Source:\s*{filename}\s*[,|]\s*page\s+\d+"
+            rf"\s*[,|]\s*chunk\s+\d+\s*\*?\.?\s*",
+            line, flags=re.IGNORECASE,
+        ))
+    return text
 
 
 def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str]) -> bool:
@@ -189,6 +221,7 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
     if not any(evidence_texts):
         return False
     claim = re.sub(r"【[^】]*】", "", claim)
+    claim = _strip_provenance_markup(claim, citations)
     for citation in citations:
         claim = claim.replace(citation, "")
         claim = claim.replace(citation.split(" | ")[0], "")
