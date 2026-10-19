@@ -556,3 +556,45 @@ def test_completeness_filter_never_masks_wrong_facts():
     )
     assert "Verified source excerpts" in alone.text
     conn.close()
+
+
+def test_latest_ollama_stated_in_heading_keeps_supported_summary():
+    """Regression for live Ollama output using 'as stated in' source heading."""
+    conn, cite = _contract_evidence()
+    generated = (
+        "**Scope of Work (as stated in *Contract.pdf*, page\u202f1)**  \n"
+        "- Contractor is responsible for installing **two transformers** "
+        "and commissioning the plant.  \n"
+        "- Deliverable: **Submit design drawings** by "
+        "**15\u202fNovember\u202f2026**.  \n\n"
+        "**Exclusions**  \n"
+        "- **Civil excavation** is explicitly excluded from the contract.  \n\n"
+        "No other scope or exclusion clauses were found in the indexed documents."
+    )
+    result = _final_answer(
+        conn, generated, [cite],
+        [{"name": "get_evidence", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert result.sources == [cite]
+    assert "Verified source excerpts" not in result.text
+    assert "installing **two transformers**" in result.text
+    assert "15\u202fNovember\u202f2026" in result.text
+    assert "Civil excavation" in result.text
+    assert "No other scope" not in result.text
+    assert "complete coverage was not established" in result.text
+    assert result.tool_calls[-1]["ok"] is True
+    assert result.tool_calls[-1]["reason"] == "Unverified completeness assertion omitted"
+    for incorrect in (
+        generated.replace("two transformers", "three transformers"),
+        generated.replace("15\u202fNovember", "16\u202fNovember"),
+        generated.replace("is explicitly excluded", "is explicitly included"),
+    ):
+        unsafe = _final_answer(
+            conn, incorrect, [cite],
+            [{"name": "get_evidence", "ok": True}],
+            "Summarize the scope of work, including exclusions.",
+        )
+        assert "Verified source excerpts" in unsafe.text
+        assert unsafe.tool_calls[-1]["ok"] is False
+    conn.close()
