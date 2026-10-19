@@ -255,3 +255,45 @@ def test_contract_fallback_sources_exclude_unrelated_document_list_entries():
     )
     assert "Verified source excerpts" in answer.text
     assert answer.sources == [cite]
+
+
+
+def test_contract_fallback_reads_as_grounded_summary_not_raw_error():
+    conn, cite = _contract_evidence()
+    # Different providers may add unsupported introductory language or synonyms.
+    answer = _final_answer(
+        conn,
+        "The contractor will undertake electrical infrastructure modernization. "
+        "Civil excavation is excluded.",
+        [cite], [{"name": "search_documents", "ok": True}],
+        "Summarize the scope of work, including exclusions.",
+    )
+    assert answer.text.startswith("**Verified source excerpts")
+    assert "**Scope of work:**" in answer.text
+    assert "**Exclusions:**" in answer.text
+    assert "install two transformers and commission the plant" in answer.text
+    assert "Civil excavation is excluded" in answer.text
+    assert "electrical infrastructure modernization" not in answer.text
+    assert "Submit design drawings" not in answer.text  # not asked for deliverables
+    assert answer.sources == [cite]
+    assert answer.tool_calls[-1]["name"] == "answer_verification"
+    assert answer.tool_calls[-1]["ok"] is False
+    assert "electrical infrastructure modernization" in (
+        answer.tool_calls[-1]["generated_text_preview"]
+    )
+    conn.close()
+
+
+def test_fallback_includes_deliverables_when_explicitly_requested():
+    conn, cite = _contract_evidence()
+    answer = _final_answer(
+        conn, "The contractor must install generators.",
+        [cite], [{"name": "search_documents", "ok": True}],
+        "Summarize the scope of work, exclusions and deliverables.",
+    )
+    assert "**Scope of work:**" in answer.text
+    assert "**Exclusions:**" in answer.text
+    assert "**Deliverables:**" in answer.text
+    assert "15 November 2026" in answer.text
+    assert "install generators" not in answer.text
+    conn.close()
