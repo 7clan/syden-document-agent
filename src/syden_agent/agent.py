@@ -361,6 +361,11 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   numeric_args: dict[str, Any] | None = None,
                   date_called: bool = False) -> Answer:
     verified = _verified_sources(conn, citations)
+    # Prefer evidence locations to file-list entries when both were retrieved.
+    # A document-level citation confirms existence, not the factual statement.
+    precise = [cite for cite in verified if not cite.endswith(" | document")]
+    if precise:
+        verified = precise
     if not trace:
         return Answer("The model did not call a document tool; no grounded answer is available.", [], [])
     if _needs_numeric_query(question):
@@ -381,7 +386,9 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         if excerpts:
             return Answer("The model's claim could not be verified. "
                           "Verified source excerpts (verbatim, not a generated summary):\n" +
-                          "\n".join(excerpts), verified, trace)
+                          "\n".join(excerpts),
+                          [cite for cite in verified if any(line.endswith(" — " + cite)
+                                                             for line in excerpts)], trace)
         return Answer("The model's claim could not be verified; "
                       "no passage-level evidence was available.", verified, trace)
     # Provider-specific citation tokens are not source references. Expose only
