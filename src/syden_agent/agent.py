@@ -747,6 +747,20 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     if not model.strip():
         raise ValueError("A Gemini model ID is required.")
     client = genai.Client(api_key=key)
+
+    def semantic_check(prompt_question: str, draft: str,
+                       evidence: dict[str, str]) -> str:
+        if os.getenv("SYDEN_SEMANTIC_VERIFY", "1").strip() == "0":
+            return ""
+        response = client.models.generate_content(
+            model=model,
+            contents=verification_request(prompt_question, draft, evidence),
+            config=types.GenerateContentConfig(
+                system_instruction=VERIFIER_SYSTEM, temperature=0,
+            ),
+        )
+        return response.text or ""
+
     funcs = [types.FunctionDeclaration(name=t["name"], description=t["description"],
                                         parameters_json_schema=t["parameters"]) for t in TOOL_SCHEMAS]
     functions = types.Tool(function_declarations=funcs)
@@ -775,7 +789,8 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                     text="Call extract_dates before answering the date question.")]))
                 continue
             return _final_answer(conn, text, citations, tool_calls, question, numeric_args,
-                                 _has_dates_result(tool_calls), provider="gemini")
+                                 _has_dates_result(tool_calls), provider="gemini",
+                                 semantic_checker=semantic_check)
         if not response.candidates or response.candidates[0].content is None:
             return Answer("Provider returned tool calls without usable message content.",
                           _verified_sources(conn,citations), tool_calls)
@@ -829,6 +844,23 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
 
     key, model, base_url = _compatible_config(provider, model_override=model_override)
     client = OpenAI(api_key=key, **({"base_url": base_url} if base_url else {}))
+
+    def semantic_check(prompt_question: str, draft: str,
+                       evidence: dict[str, str]) -> str:
+        if os.getenv("SYDEN_SEMANTIC_VERIFY", "1").strip() == "0":
+            return ""
+        check = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": VERIFIER_SYSTEM},
+                {"role": "user", "content": verification_request(
+                    prompt_question, draft, evidence,
+                )},
+            ],
+            temperature=0,
+        )
+        return check.choices[0].message.content or ""
+
     schemas = [{"type": "function", "function": {"name": t["name"],
                 "description": t["description"], "parameters": t["parameters"]}} for t in TOOL_SCHEMAS]
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM},
@@ -859,7 +891,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 messages.append({"role": "user", "content": "Call extract_dates before answering."})
                 continue
             return _final_answer(conn, text, citations, trace, question, numeric_args,
-                                 _has_dates_result(trace), provider=provider)
+                                 _has_dates_result(trace), provider=provider,
+                                 semantic_checker=semantic_check)
         messages.append(msg.model_dump(exclude_none=True))
         for call in msg.tool_calls:
             try:
