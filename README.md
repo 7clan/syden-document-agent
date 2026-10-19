@@ -80,6 +80,27 @@ reported by the indexer. Selecting a file in a browser is necessary for access
 to your local Downloads: typing only its filename cannot grant browser access
 to that local file. The old **Index folder** button still works.
 
+### See, remove, or delete indexed documents
+
+The sidebar's **Current documents** section displays every supported file in the
+selected folder, including subfolders, with an index status (ready, failed, or
+not indexed). This is more readable than the expandable JSON diagnostics.
+**Index folder** remains available for files copied manually into the folder.
+Selecting files through the browser upload saves them to disk and **automatically
+runs indexing** without pressing the Index folder button.
+
+Open **Remove or delete a document**, choose an exact filename, then select:
+
+- **Remove from AI (keep an archived copy):** Move the file to a sibling folder
+  named `<active-folder-name>_removed` outside the indexed folder. This is
+  reversible by moving it back and clicking Index folder.
+- **Permanently delete file:** Delete the selected disk file, not just its
+  index entry. This cannot be undone by the application.
+
+Both actions require a separate confirmation checkbox and button. After a
+successful action, the index is refreshed automatically. Files with the same
+basename but different extensions are managed independently.
+
 ### Choose a provider and model in Streamlit
 
 The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
