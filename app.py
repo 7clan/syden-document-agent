@@ -21,7 +21,48 @@ st.set_page_config(page_title="SYDEN Document Agent", page_icon="📄", layout="
 st.title("Project Document Agent")
 st.caption("PDFs + Excel + Word · Evidence-grounded answers · Read-only tool calling")
 conn = connect(os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
+PROVIDERS = {
+    "gemini": ("Google Gemini", "GEMINI_API_KEY", "GEMINI_MODEL", "gemini-2.5-flash"),
+    "groq": ("Groq", "GROQ_API_KEY", "GROQ_MODEL", "openai/gpt-oss-20b"),
+    "ollama_cloud": ("Ollama Cloud", "OLLAMA_API_KEY", "OLLAMA_MODEL", "gpt-oss:20b-cloud"),
+    "openai": ("OpenAI", "OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4.1-mini"),
+    "compatible": ("Other compatible API", "COMPATIBLE_API_KEY",
+                   "COMPATIBLE_MODEL", ""),
+}
+CUSTOM_MODEL = "Other model ID (enter manually)"
 with st.sidebar:
+    st.subheader("AI model")
+    provider_ids = list(PROVIDERS)
+    configured_provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    provider = st.selectbox(
+        "Provider", provider_ids,
+        index=provider_ids.index(configured_provider) if configured_provider in provider_ids else 0,
+        format_func=lambda value: PROVIDERS[value][0],
+    )
+    provider_label, api_key_var, model_var, tested_model = PROVIDERS[provider]
+    configured_model = os.getenv(model_var, "").strip()
+    model_options = list(dict.fromkeys(
+        candidate for candidate in (configured_model, tested_model) if candidate
+    ))
+    model_options.append(CUSTOM_MODEL)
+    model_choice = st.selectbox("Model", model_options, key=f"model_{provider}")
+    selected_model = (st.text_input("Model ID", key=f"custom_model_{provider}").strip()
+                      if model_choice == CUSTOM_MODEL else model_choice)
+    has_key = bool(os.getenv(api_key_var, "").strip())
+    if not has_key:
+        st.info(f"Add {api_key_var} to your local .env to use this provider.")
+    if provider == "compatible" and not os.getenv("COMPATIBLE_BASE_URL", "").strip():
+        st.info("Other compatible APIs also need COMPATIBLE_BASE_URL in .env.")
+    ready_to_ask = bool(has_key and selected_model and
+                        (provider != "compatible" or
+                         os.getenv("COMPATIBLE_BASE_URL", "").strip()))
+    selection = (provider, selected_model)
+    if st.session_state.get("_llm_selection") != selection:
+        st.session_state.pop("last_answer", None)
+        st.session_state.pop("csv_export", None)
+        st.session_state["_llm_selection"] = selection
+    st.caption(f"Selected: {provider_label} / {selected_model or 'Choose a model'}")
+    st.divider()
     st.subheader("Document folder")
     default_folder = ".local/demo_documents" if Path(".local/demo_documents").is_dir() else "documents"
     folder = st.text_input("Folder path on this computer", default_folder)
@@ -42,10 +83,11 @@ with st.sidebar:
 
 question = st.text_area("Ask a question about the indexed documents",
                         placeholder="List all total cost items above SAR 1 million across the BOQs")
-if st.button("Ask agent", disabled=not question.strip(), type="primary"):
+if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
+             type="primary"):
     with st.spinner("Analyzing evidence..."):
         try:
-            answer = ask(conn, question)
+            answer = ask(conn, question, provider=provider, model=selected_model)
         except Exception as exc:  # noqa: BLE001 - show provider errors in the UI
             st.error(f"Agent error: {exc}")
         else:
