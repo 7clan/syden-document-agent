@@ -68,6 +68,7 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20) -> d
         return {"error": "Search query is empty"}
     limit = min(max(int(limit), 1), 100)
     terms = list(dict.fromkeys(re.findall(r"[\w]+", query.lower())))
+    phrase = " ".join(query.casefold().split())
     if not terms:
         return {"results": []}
     found: list[dict[str, Any]] = []
@@ -87,6 +88,10 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20) -> d
                             "ORDER BY d.path,p.page,p.chunk"):
         haystack = row["text"].lower()
         score = sum(t in haystack for t in terms)
+        # The exact phrase "contract value" must outrank a page that merely
+        # contains "contract" and unrelated "values" in separate sentences.
+        if len(terms) > 1 and phrase in " ".join(haystack.split()):
+            score += len(terms) + 2
         if score:
             keep({"citation": f"{row['path']} | page {row['page']} | chunk {row['chunk']}",
                   "preview": row["text"][:1300], "score": score})
