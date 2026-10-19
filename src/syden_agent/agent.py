@@ -213,23 +213,37 @@ def _supported_prose(conn: sqlite3.Connection, claim: str, citations: list[str])
 
 def _verified_extracts(conn: sqlite3.Connection, citations: list[str],
                        question: str) -> list[str]:
-    """Safe fallback: use only verbatim, passage-level source excerpts."""
+    """Present concise, verbatim source clauses when a generated summary fails checks.
+
+    This is extractive rather than a claim that we semantically verified the LLM text.
+    Only source passages resolved in the local index may enter the answer.
+    """
     excerpts: list[str] = []
+    scope_question = bool(re.search(r"\b(?:scope|work|obligations?|exclusions?)\b",
+                                    question, re.IGNORECASE))
+    wants_deliverables = bool(re.search(
+        r"\b(?:deliverables?|dates?|deadlines?|milestones?)\b",
+        question, re.IGNORECASE))
     for citation in citations:
         evidence = get_evidence(conn, citation)
         if not ("text" in evidence or "row" in evidence):
             continue
-        candidates = _split_prose(_evidence_text(evidence))
-        scope_question = bool(re.search(r"\b(?:scope|work|obligations?|exclusions?)\b",
-                                        question, re.IGNORECASE))
-        relevant = [part for part in candidates if
-                    not scope_question or _POSITIVE_SCOPE.search(part) or
-                    _NEGATIVE_SCOPE.search(part)]
-        for part in relevant[:3]:
-            excerpts.append(f"- {part[:300]} — {citation}")
-        if len(excerpts) >= 6:
-            break
-    return excerpts[:6]
+        for part in _split_prose(_evidence_text(evidence)):
+            is_exclusion = bool(_NEGATIVE_SCOPE.search(part))
+            is_deliverable = bool(re.search(
+                r"\b(?:deliverables?|submit|submission|milestone|due date)\b",
+                part, re.IGNORECASE))
+            if scope_question and not (_POSITIVE_SCOPE.search(part) or is_exclusion):
+                continue
+            if scope_question and is_deliverable and not wants_deliverables:
+                continue
+            label = ("Exclusions" if is_exclusion else
+                     "Deliverables" if is_deliverable else
+                     "Scope of work" if scope_question else "Source evidence")
+            excerpts.append(f"- **{label}:** {part[:300]} — {citation}")
+            if len(excerpts) >= 6:
+                return excerpts
+    return excerpts
 
 
 def _question_filter(question: str, original: dict[str, Any]) -> dict[str, Any]:
@@ -382,11 +396,17 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)
     if not _supported_prose(conn, text, verified):
+        # Store the rejected response in the local audit trail for diagnosis; never
+        # present its unsupported claims as verified evidence.
+        trace = [*trace, {"name": "answer_verification", "ok": False,
+                         "reason": "Model prose did not pass source-clause verification",
+                         "generated_text_preview": text[:1200]}]
         excerpts = _verified_extracts(conn, verified, question)
         if excerpts:
-            return Answer("The model's claim could not be verified. "
-                          "Verified source excerpts (verbatim, not a generated summary):\n" +
-                          "\n".join(excerpts),
+            return Answer("**Verified source excerpts — document summary:**\n\n" +
+                          "\n".join(excerpts) +
+                          "\n\n*The generated paraphrase could not be verified in full. "
+                          "Only verbatim source clauses are shown above.*",
                           [cite for cite in verified if any(line.endswith(" — " + cite)
                                                              for line in excerpts)], trace)
         return Answer("The model's claim could not be verified; "
