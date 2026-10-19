@@ -342,3 +342,58 @@ def test_coordinated_summary_does_not_launder_unsupported_obligations():
     for claim in invalid:
         assert not _supported_prose(conn, intro + claim, [cite]), claim
     conn.close()
+
+
+def test_real_gemini_variation_passes_without_loosening_fact_checks():
+    conn, cite = _contract_evidence()
+    response = (
+        "Based on the indexed documents, here is the summary of the scope of work "
+        "and its exclusions:\n\n"
+        "* **Scope of Work:** The contractor shall install two transformers and "
+        "commission the plant, along with submitting design drawings by 15 November 2026. "
+        "(*Source: Contract.pdf | page 1 | chunk 0*)\n"
+        "* **Exclusions:** Civil excavation is excluded from this contract. "
+        "(*Source: Contract.pdf | page 1 | chunk 0*)"
+    )
+    assert _supported_prose(conn, response, [cite])
+    result = _final_answer(conn, response, [cite], [{"name": "get_evidence", "ok": True}],
+                           "Summarize the scope of work, including exclusions.")
+    assert result.text == response
+    assert result.sources == [cite]
+    conn.close()
+
+
+def test_real_groq_variation_accepts_headings_unicode_spaces_and_source_footer():
+    conn, cite = _contract_evidence()
+    response = (
+        "**Scope of Work (Contract.pdf – page 1)**  \n"
+        "- Contractor is responsible for **installing two transformers** and "
+        "**commissioning the plant**.  \n"
+        "- Deliverable: **Submit design drawings** by **15 November 2026**.  \n\n"
+        "**Exclusions**  \n"
+        "- **Civil excavation** is explicitly excluded from the contract.  \n\n"
+        "*Source: Contract.pdf, page 1, chunk 0.*"
+    )
+    assert _supported_prose(conn, response, [cite])
+    result = _final_answer(conn, response, [cite], [{"name": "get_evidence", "ok": True}],
+                           "Summarize the scope of work, including exclusions.")
+    assert result.text == response
+    assert result.sources == [cite]
+    conn.close()
+
+
+def test_citation_decoration_cannot_hide_invented_work_or_wrong_dates():
+    conn, cite = _contract_evidence()
+    intro = ("Based on the indexed documents, here is the summary of the scope "
+             "of work and its exclusions:\n")
+    for wrong in (
+        "- The contractor shall install four transformers and commission the plant.",
+        "- The contractor shall install two transformers, along with building a hospital.",
+        "- The contractor shall install two transformers, along with submitting "
+        "design drawings by 16 November 2026.",
+        "- Civil excavation is included as required work.",
+        "- Commissioning the plant is excluded.",
+    ):
+        candidate = intro + wrong + "\n*Source: Contract.pdf, page 1, chunk 0.*"
+        assert not _supported_prose(conn, candidate, [cite]), wrong
+    conn.close()
