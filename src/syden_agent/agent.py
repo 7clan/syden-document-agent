@@ -662,7 +662,7 @@ def _verified_explicit_exclusions(conn: sqlite3.Connection,
             # Keep scope exclusions, not unrelated statements such as
             # "no acceptance certificate has been issued".
             if not re.search(
-                r"(?i)\b(?:exclud|outside scope|not authorized|no authorization|"
+                r"(?i)\b(?:exclud(?:e|es|ed|ing)|outside scope|not authorized|no authorization|"
                 r"not part of|no approval)\b", clause
             ):
                 continue
