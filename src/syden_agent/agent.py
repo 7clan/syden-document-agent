@@ -496,7 +496,17 @@ def _verified_numeric_answer(conn: sqlite3.Connection, question: str,
 
 
 def _needs_dates_query(question: str) -> bool:
-    return bool(re.search(r"\b(?:dates?|deadlines?|milestones?)\b", question, re.IGNORECASE))
+    """Extract every date only for explicit date-list requests.
+
+    A question like 'Did CO-07 extend the deadline?' needs an answer about
+    that *specific* obligation, not a dump of every date from every file.
+    """
+    return bool(re.search(
+        r"(?i)\b(?:extract|list|show|find|enumerate)\s+(?:all\s+)?"
+        r"(?:the\s+)?(?:dates?|deadlines?|milestones?)\b|"
+        r"\b(?:all|every)\s+(?:dates?|deadlines?|milestones?)\b",
+        question,
+    ))
 
 
 def _verified_dates_answer(conn: sqlite3.Connection,
