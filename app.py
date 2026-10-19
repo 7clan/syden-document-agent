@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ from syden_agent.agent import ask
 from syden_agent.db import connect
 from syden_agent.ingest import ingest_folder
 from syden_agent.tools import extract_dates, list_documents, query_spreadsheet
+from syden_agent.ui_format import display_safe_rows
 
 load_dotenv()
 st.set_page_config(page_title="SYDEN Document Agent", page_icon="📄", layout="wide")
@@ -21,7 +23,8 @@ st.caption("PDFs + Excel + Word · Evidence-grounded answers · Read-only tool c
 conn = connect(os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
 with st.sidebar:
     st.subheader("Document folder")
-    folder = st.text_input("Folder path on this computer", "documents")
+    default_folder = ".local/demo_documents" if Path(".local/demo_documents").is_dir() else "documents"
+    folder = st.text_input("Folder path on this computer", default_folder)
     if st.button("Index folder", type="primary", use_container_width=True):
         with st.spinner("Reading documents..."):
             st.session_state["index_report"] = ingest_folder(conn, folder)
@@ -71,7 +74,7 @@ if "last_answer" in st.session_state:
                        extract_dates(conn, limit=100, offset=(date_page - 1) * 100))
         st.caption(f"Showing {len(date_result['dates'])} of {date_total} candidate dates; "
                    "ambiguous dates are not assigned a definite deadline.")
-        st.dataframe(date_result["dates"], use_container_width=True)
+        st.dataframe(display_safe_rows(date_result["dates"]), use_container_width=True)
 
     spreadsheet_calls = [call for call in answer.tool_calls
                          if call["name"] == "query_spreadsheet" and call.get("ok", True)]
