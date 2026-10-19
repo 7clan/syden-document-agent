@@ -1,0 +1,82 @@
+# Acceptance test plan and observed results
+
+| Scenario | Expected acceptance criterion | Actual result |
+| --- | --- | --- |
+| Empty folder | Clear warning, no hallucinated files | Covered by offline test; manual review pending |
+| Corrupt PDF + valid XLSX | PDF reported failed, Excel remains searchable | Corruption isolation covered by offline tests; exact pairing pending manual review |
+| All BOQ items > SAR 1M | Excludes exactly 1M; includes all >1M; cites sheet/cells | Passed offline and live Gemini on synthetic demo |
+| Two BOQs with different header rows | Finds correct total amount columns in both sheets | Covered by multi-sheet/repeated-header offline tests |
+| Different currencies | Does not assume all numbers are SAR | Covered by XLS/XLSX mixed-currency offline tests |
+| Scope summary | Only sourced obligations/exclusions, precise pages | Not run manually |
+| Dates + deliverables | All candidate dates, real deliverable associations, no invented deadlines | Not run manually |
+| Scanned document | Explicit limitation or OCR fallback | Empty-text PDF reported failed in offline test; OCR absent |
+| Large workbook | No OOM; good performance; no silently lost matches | 5,000-row synthetic workbook passed; larger unseen files pending |
+| Switch document folders | Old folder's records cannot affect new answer | Covered by offline test |
+| Prompt injection in PDF/Excel cell | Instructions inside data ignored | Not run manually |
+| Legacy XLS/XLSX equivalence | Numeric filters, repeated headers, dates, cached values and cell citations agree | Covered by synthetic offline tests |
+| Word paragraphs and tables | Ordered blocks, resolvable references, dates and cross-document search | Covered by synthetic offline tests |
+| Corrupt/empty XLS and DOCX | Each file fails independently; valid files remain searchable | Covered by synthetic offline tests |
+| Separate amount/currency columns | SAR row retained; AED row excluded in XLSX and XLS | Covered by synthetic offline tests |
+| Numeric year and merged/repeated headings | Both SAR amounts found at original cells | Covered by synthetic offline tests |
+| Formula without cached value | Known row returned; unknown cell and incomplete warning reported | Covered by synthetic offline tests |
+| PDF BOQ table and borderless lines | Page/table/row or page/line citation; uncertain lines warned | Covered by independent ReportLab fixtures |
+| More than 100 dates | Correct total and offset pagination; month-first Nov date captured | Covered by synthetic offline tests |
+| Unsupported prose with real citation | Fabricated budget rejected | Covered by synthetic offline test |
+| Streamlit indexing/result display | No exception; verified BOQ table visible | Covered by headless AppTest |
+| CLI ingest, list, BOQ and dates | Commands return expected JSON and citations | Covered by offline integration test |
+| Source-only ZIP | No `.env`, documents, databases or generated metadata | Covered by offline ZIP test |
+| Gemini live tool call | Inspect actual call trace and cited answer | Passed on synthetic corpus with `gemini-2.5-flash` |
+| Groq live tool call | Inspect actual call trace and cited answer | Passed with `openai/gpt-oss-20b`; Llama models unavailable to this key |
+| Ollama Cloud live tool call | Inspect actual call trace and cited answer | Passed with `gpt-oss:20b-cloud` |
+| Fresh environment setup | Editable install and checks succeed in a clean Windows venv | `pip install -e '.[openai,dev]'` succeeded in `.local/fresh_venv`; CLI help, 55 tests and Ruff passed |
+
+Do not mark rows passed until they have actually been executed and independently checked.
+
+## Reproducible synthetic demo
+
+Run `python scripts/create_demo.py` once from the repository root, then
+`syden-agent ingest ".local/demo_documents"`. The script refuses to overwrite an
+existing folder. These files contain invented project data, not employer documents.
+The deterministic assertions are in `tests/test_demo_e2e.py`.
+
+| Reviewer question | Exact expected evidence |
+| --- | --- |
+| List all cost items above SAR 1 million. | Transformers: SAR 1,500,000 at `BOQ.xlsx | Electrical BOQ!C2`; Switchgear: SAR 2,250,000 at `BOQ.xlsx | Electrical BOQ!C4`. Cable at C3 equals SAR 1 million and is excluded. Sum SAR 3,750,000. |
+| What is the scope of work? | Install two transformers and commission the plant at `Contract.pdf | page 1 | chunk 0`. |
+| What is excluded? | Civil excavation at `Contract.pdf | page 1 | chunk 0`. |
+| Which dates and deliverables appear? | Design drawings by 15 November 2026 at `Contract.pdf | page 1 | chunk 0`; commission plant 2026-12-01 at `Milestones.xlsx | Milestones!B2`. `03/04/26` at B3 remains ambiguous and should not be called a definite deadline. |
+
+Observed locally before optional format support: `python -m pytest -q` passed all 24 offline tests.
+After adding XLS and DOCX support, `python -m pytest -q` passed all 31 offline tests and
+`ruff check src tests app.py scripts` passed on 2026-10-19. These format tests use synthetic files;
+no real confidential documents or live provider calls were used for the new formats.
+CLI ingestion of the generated folder reported 3 indexed, 0 failed.
+On 2026-10-19, live synthetic smoke checks passed with Gemini `gemini-2.5-flash`,
+Groq `openai/gpt-oss-20b`, and Ollama Cloud `gpt-oss:20b-cloud`. Gemini answered
+all three assessment questions on the synthetic folder with correct source
+locations. Groq and Ollama Cloud produced correct numeric tool results for the
+BOQ question, though their prose used typographic hyphens in item codes. The
+Groq account listed no Llama chat model; two Llama model IDs returned 404.
+
+## Audit remediation verification (2026-10-19)
+
+The new audit fixtures are in `tests/test_audit_regressions.py` and
+`tests/test_audit_agent.py`. They include independently generated ReportLab PDFs,
+5,000 spreadsheet rows, both Excel formats, mixed currencies, missing formula
+caches, ambiguous dates, and claim-verification checks. Live synthetic smoke
+tests were rerun with Gemini, Groq `openai/gpt-oss-20b`, and Ollama Cloud
+`gpt-oss:20b-cloud`; each made an actual document tool call and passed the
+stricter smoke criterion. A live Gemini BOQ question called `query_spreadsheet`
+and returned SAR 1,500,000 at C2 and SAR 2,250,000 at C4, excluding the
+SAR 1,000,000 boundary row and summing to SAR 3,750,000. These live calls used
+only invented demonstration documents. OpenAI and Groq-hosted Llama remain
+untested with this account.
+
+After the audit fixes and an explicit row-currency precedence test, a clean
+Windows virtual environment passed all 55 offline tests and Ruff. The three
+provider smoke tests were rerun against synthetic text after the numeric and
+date answer changes. Each returned `success: true` with a real document tool
+call. This verifies the configured models, not all models offered by each host.
+The final live Gemini BOQ check returned two SAR rows (C2 and C4), a SAR
+3,750,000 sum, and no false incompleteness warning from the unrelated
+`Milestones.xlsx` workbook. Its trace included `query_spreadsheet`.
