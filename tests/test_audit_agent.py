@@ -405,8 +405,8 @@ def test_explicit_contract_citation_omits_unrelated_search_hit():
                  "VALUES('BOQ.xlsx','xlsx','ready')")
     conn.execute("INSERT INTO sheet_rows(document_id,sheet,row_num,cells_json) "
                  "VALUES(2,'Electrical BOQ',2,?)", (
-                     '{"A":{"value":"EL-01"},"B":{"value":"Transformers"},'
-                     '"C":{"value":1500000}}',))
+                     ('{"A":{"value":"EL-01"},"B":{"value":"Transformers"},'
+                      '"C":{"value":1500000}}'),))
     boq_cite = "BOQ.xlsx | Electrical BOQ | row 2"
     response = (
         "The scope of work includes the installation of two transformers and "
