@@ -366,3 +366,32 @@ All generated files, local indexes and raw answer logs are under ignored
 exposed no incorrect calculation, but an evidence-linked scope summary can
 still omit facts. This evaluation does not establish complete coverage of
 unfamiliar documents or prove arbitrary model interpretations.
+
+## Fresh interview-brief exercise (2026-10-20)
+
+A separate fictional folder was generated under ignored
+`.local/interview_blind_20261020` with one contract PDF and two XLSX BOQs. Its
+names, values, layouts and dates differ from the development fixtures. The three
+questions below use the exact wording in SYDEN's brief and were sent through
+the CLI to the configured real Gemini provider, one at a time. The resulting
+answers were compared against the generated source files, not inferred from
+their citation status.
+
+| Exact brief question | Observed result | Real model-selected document tools |
+| --- | --- | --- |
+| List all cost items above SAR 1 million in these BOQs. | Pass: C-10 SAR 1,180,000, E-21 SAR 1,340,000, E-23 SAR 1,075,000; three matches, SAR 3,595,000. The SAR 1,000,000 boundary row was excluded. Exact amount cells E5, E6 and E8 were cited across the two books. | `list_documents`, `inspect_document`, `query_spreadsheet`, `get_evidence` |
+| Summarize the scope of work in this contract. | Pass: two 250 kW pumps, foundation, 85 metres of cable, telemetry and acceptance package; also correctly reported the exclusions. Cited the contract PDF page 1. | `list_documents`, `search_documents` |
+| Extract all dates and deliverables from these documents. | Initial answer found all five dates but clipped PDF context and omitted the spreadsheet status in its displayed summary. After a general date-presentation fix, a real retest showed IFC drawings 12 January 2028, FAT certificates 28 February 2028, commissioning/handover 30 June 2028, civil inspection planning target 15 May 2028, and unapproved proposed handover 15 July 2028, with PDF page and Excel cell references. Pass after the fix; status remains evidence-linked because candidate context does not prove contractual interpretation. | `extract_dates`, `list_documents`, `search_documents`, `inspect_document` on the retest |
+
+Separate edge-case folders were indexed without an LLM request. An empty folder
+reported `Folder is empty`, and asking a question returned `No readable documents
+are indexed`. A corrupt PDF was marked failed; a subsequent question returned
+the same safe no-readable-documents message. A 20,000-line XLSX indexed in about
+7 seconds locally; the deterministic strict-threshold query returned all five
+SAR 1,200,000 matches and their exact cells, for SAR 6,000,000 total. This
+measures one large workbook and does not establish a general size or latency
+guarantee for arbitrary PDFs or workbooks.
+
+The fresh corpus exposed a presentation issue, so its dates retest is a
+regression check rather than an untouched held-out measurement. No additional
+provider or arbitrary employer documents were tested in this exercise.

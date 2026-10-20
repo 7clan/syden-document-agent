@@ -118,6 +118,35 @@ def test_failed_document_marks_numeric_and_date_answers_incomplete(tmp_path):
     assert "unreadable.pdf" in dates.text
 
 
+def test_date_answer_shows_complete_pdf_line_and_spreadsheet_row_status():
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('Terms.pdf','pdf','ready')")
+    conn.execute("INSERT INTO documents(path,kind,status) "
+                 "VALUES('Plan.xlsx','xlsx','ready')")
+    passage = ("Background text preceding the deadline.\n"
+               "Deliver approved drawings by 12 January 2028.\n"
+               "Other context follows.")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES(1,1,0,?)",
+                 (passage,))
+    cells = ('{"A":{"value":"Civil inspection"},'
+             '"B":{"value":"15 May 2028"},'
+             '"C":{"value":"Planning target, not contractual"}}')
+    conn.execute("INSERT INTO sheet_rows(document_id,sheet,row_num,cells_json) "
+                 "VALUES(2,'Schedule',3,?)",
+                 (cells,))
+    conn.commit()
+
+    answer = _final_answer(conn, "", [], [{"name": "extract_dates", "ok": True}],
+                           "Extract all dates and deliverables.", date_called=True)
+
+    assert "Deliver approved drawings by 12 January 2028." in answer.text
+    assert "Civil inspection; Planning target, not contractual" in answer.text
+    assert "Background text preceding" not in answer.text
+    assert answer.sources == ["Terms.pdf | page 1 | chunk 0",
+                              "Plan.xlsx | Schedule!B3"]
+    conn.close()
+
+
 def test_numeric_answer_ignores_fabricated_model_amount(tmp_path):
     conn = _indexed_boq(tmp_path)
     answer = _final_answer(

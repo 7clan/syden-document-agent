@@ -1037,7 +1037,19 @@ def _verified_dates_answer(conn: sqlite3.Connection,
              "document coverage is incomplete."]
     for item in dates:
         normalized = item["normalized_date"] or "ambiguous or invalid"
-        action = str(item["related_action"] or "No linked obligation established")[:120]
+        context = item["context"]
+        if isinstance(context, dict):
+            # An Excel row is the evidence unit: include its activity and status
+            # rather than relying on a verb in one cell to identify an action.
+            action = "; ".join(str(value).strip() for value in context.values()
+                               if value is not None and
+                               item["date_text"] not in str(value))
+        else:
+            # PDF/Word date windows may start halfway through the preceding
+            # sentence. Show the line containing this date, not that cut window.
+            action = next((line.strip() for line in str(context).splitlines()
+                           if item["date_text"] in line), "")
+        action = action or "No linked action established"
         lines.append(f"- {item['date_text']} ({normalized}); context: {action} — {item['citation']}")
     if result["has_more"]:
         lines.append(f"Showing {len(dates)} of {result['total_matches']} dates; "
