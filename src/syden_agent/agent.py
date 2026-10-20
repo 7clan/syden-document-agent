@@ -26,6 +26,7 @@ from .tools import (
     extract_dates,
     get_evidence,
     query_spreadsheet,
+    search_documents,
 )
 
 load_dotenv()
@@ -358,6 +359,202 @@ def _evidence_handoff(conn: sqlite3.Connection, citations: list[str], query: str
         if len(sections) >= 8:
             break
     return "\n".join(sections), included
+
+
+def _cross_document_amount_question(question: str) -> bool:
+    lower = question.casefold()
+    return bool(re.search(r"\b(?:boq|spreadsheet|workbook)\b", lower)
+                and re.search(r"\bcontract\b", lower)
+                and re.search(r"\b(?:subtotal|sum|total|amount|value|equal|compare)\b", lower))
+
+
+def _financial_comparison_context(conn: sqlite3.Connection, question: str
+                                  ) -> tuple[str, list[str], bool]:
+    """Retrieve separate worksheet totals and original contract passages.
+
+    This is application-initiated read-only retrieval, not a model tool call or
+    semantic verification of the model's eventual comparison.
+    """
+    if not _cross_document_amount_question(question):
+        return "", [], False
+    sheets = conn.execute(
+        "SELECT d.path,r.sheet FROM sheet_rows r JOIN documents d ON d.id=r.document_id "
+        "WHERE d.status='ready' GROUP BY d.path,r.sheet ORDER BY d.path,r.sheet LIMIT 13"
+    ).fetchall()
+    incomplete = len(sheets) > 12
+    lines = [("Independently calculated BOQ amounts by individual worksheet "
+              "(do not merge different sheets):")]
+    citations: list[str] = []
+    for path, sheet in sheets[:12]:
+        result = query_spreadsheet(conn, file=path, sheet=sheet,
+                                   operator="all", value=0, limit=500)
+        if "error" in result or not result["total_matches"]:
+            continue
+        sums = ", ".join(f"{currency} {amount}" for currency, amount
+                         in result["matched_amount_sums"].items())
+        qualifier = ("known amounts only; incomplete" if result["incomplete"] else
+                     "all matched amount rows calculated")
+        cells = [row["citation"] for row in result["matches"]]
+        citations.extend(cells[:20])
+        shown = ", ".join(cells[:20])
+        if len(cells) > 20 or result["has_more"]:
+            shown += f" (first {min(len(cells), 20)} of {result['total_matches']} cells)"
+        lines.append(f"{path} | {sheet}: {sums}; {result['total_matches']} items; "
+                     f"{qualifier}. Amount cells: {shown}")
+        incomplete |= bool(result["incomplete"] or result["has_more"] or len(cells) > 20)
+    if len(lines) == 1:
+        lines.append("No complete BOQ amount column was identified.")
+        incomplete = True
+    passages: list[str] = []
+    for terms in ("original contract value", "contract sum"):
+        for hit in search_documents(conn, terms, limit=8).get("results", []):
+            cite = hit["citation"]
+            if cite in citations or cite in [item.split(": ", 1)[0] for item in passages]:
+                continue
+            evidence = get_evidence(conn, cite)
+            if "text" not in evidence:
+                continue
+            excerpt = _search_excerpt(evidence["text"], terms.split(), 900)
+            passages.append(f"{cite}: {excerpt}")
+            citations.append(cite)
+            if len(passages) >= 3:
+                break
+        if len(passages) >= 3:
+            break
+    lines.append("Original contract passages retrieved separately:")
+    lines.extend(passages or ["No contract passage was located; request clarification if needed."])
+    return "\n".join(lines), list(dict.fromkeys(citations)), incomplete
+
+
+def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
+                                  trace: list[dict[str, Any]]) -> Answer | None:
+    """Compare explicit original contract value with one unambiguous base BOQ.
+
+    When operand selection is uncertain, defer to the source-linked answer path.
+    No model-generated subtotal or arithmetic is used here.
+    """
+    if (not _cross_document_amount_question(question)
+            or not re.search(r"(?i)\b(?:equal|same)\b", question)):
+        return None
+    if re.search(r"(?i)\b(?:revised|updated|amended|post-change)\b", question):
+        return None
+    sheets = conn.execute(
+        "SELECT d.path,r.sheet FROM sheet_rows r JOIN documents d ON d.id=r.document_id "
+        "WHERE d.status='ready' GROUP BY d.path,r.sheet ORDER BY d.path,r.sheet LIMIT 13"
+    ).fetchall()
+    if len(sheets) > 12:
+        return None
+    workbook_paths = [path for path, _ in sheets]
+    named, _ = _explicit_files(question, workbook_paths)
+    candidates = []
+    for path, sheet in sheets:
+        if named and path not in named:
+            continue
+        result = query_spreadsheet(conn, file=path, sheet=sheet,
+                                   operator="all", value=0, limit=500)
+        if "error" in result or not result["total_matches"]:
+            continue
+        if result["incomplete"] or result["has_more"]:
+            return None
+        descriptors = " ".join(str(value) for row in result["matches"][:5]
+                               for value in row["values"].values()
+                               if isinstance(value, str))
+        label = f"{sheet} {descriptors}".casefold()
+        variation = bool(re.search(r"\b(?:change\s+order|variation|additional)\b", label))
+        base = bool(re.search(r"\b(?:base|original)\b", label))
+        candidates.append((path, sheet, result, base, variation))
+    primary = [item for item in candidates if item[3] and not item[4]]
+    if len(primary) != 1:
+        primary = [item for item in candidates if not item[4]]
+    if len(primary) != 1:
+        return None
+    path, sheet, result, _, _ = primary[0]
+    if len(result["matched_amount_sums"]) != 1:
+        return None
+    currency, amount_text = next(iter(result["matched_amount_sums"].items()))
+    amount = Decimal(amount_text)
+    cells = []
+    for row in result["matches"]:
+        evidence = get_evidence(conn, row["citation"])
+        if (_num(evidence.get("value", {}).get("value")) != Decimal(row["amount_exact"])
+                or evidence.get("row") != row["values"]):
+            return None
+        cells.append(row["citation"])
+
+    contract_matches: dict[str, Decimal] = {}
+    original_value = re.compile(
+        r"(?i)\b(?:original|base|signed)\b[^.!?\n]{0,100}?\bcontract\s+"
+        r"(?:sum|value|amount)\b[^.!?\n]{0,60}?\b(SAR|AED|USD|EUR|GBP)\s*"
+        r"([\d,]+(?:\.\d+)?)")
+    for terms in ("original contract value", "contract sum"):
+        for hit in search_documents(conn, terms, limit=12).get("results", []):
+            cite = hit["citation"]
+            evidence = get_evidence(conn, cite)
+            if "text" not in evidence or " | page " not in cite:
+                continue
+            for match in original_value.finditer(evidence["text"]):
+                if match.group(1).upper() == currency:
+                    contract_matches[cite] = Decimal(match.group(2).replace(",", ""))
+    if not contract_matches or len(set(contract_matches.values())) != 1:
+        return None
+    contract_sum = next(iter(contract_matches.values()))
+    same = amount == contract_sum
+    trace = [*trace, {"name": "host_financial_comparison", "ok": True,
+                      "origin": "application", "arithmetic_checked": True,
+                      "boq_file": path, "boq_sheet": sheet,
+                      "source_count": len(cells) + len(contract_matches)}]
+    text = (f"{'Yes' if same else 'No'}. The selected BOQ worksheet {path} | {sheet} "
+            f"totals {currency} {amount}. The original contract value is "
+            f"{currency} {contract_sum}. These values "
+            f"{'are equal' if same else 'are not equal'}.")
+    return Answer(text, _verified_sources(conn, [*cells, *contract_matches]), trace,
+                  {"boq_subtotal": str(amount), "contract_value": str(contract_sum),
+                   "currency": currency, "boq_sheet": sheet}, "evidence_linked")
+
+
+def _matching_sheet_context(conn: sqlite3.Connection, question: str
+                            ) -> tuple[str, list[str], bool]:
+    """Provide complete small tables whose sheet title matches the question."""
+    if _needs_numeric_query(question):
+        return "", [], False
+    words = {word.rstrip("s") for word in re.findall(r"\w+", question.casefold())
+             if len(word) > 4}
+    sheets = conn.execute(
+        "SELECT d.path,r.sheet,COUNT(*) AS rows FROM sheet_rows r "
+        "JOIN documents d ON d.id=r.document_id WHERE d.status='ready' "
+        "GROUP BY d.path,r.sheet ORDER BY d.path,r.sheet"
+    ).fetchall()
+    matched = [item for item in sheets if words.intersection(
+        word.rstrip("s") for word in re.findall(r"\w+", item["sheet"].casefold()))]
+    if not matched:
+        return "", [], False
+    lines = ["Original rows from matching indexed worksheets:"]
+    citations = []
+    incomplete = len(matched) > 3
+    remaining = 7000
+    for item in matched[:3]:
+        rows = conn.execute("SELECT row_num,cells_json FROM sheet_rows "
+                            "WHERE document_id=(SELECT id FROM documents WHERE path=?) "
+                            "AND sheet=? ORDER BY row_num LIMIT 41",
+                            (item["path"], item["sheet"])).fetchall()
+        incomplete |= len(rows) > 40
+        lines.append(f"{item['path']} | {item['sheet']} "
+                     f"({item['rows']} populated rows):")
+        for row in rows[:40]:
+            citation = f"{item['path']} | {item['sheet']} | row {row['row_num']}"
+            values = json.loads(row["cells_json"])
+            cells = " | ".join(f"{column}: {cell.get('value')}" for column, cell
+                               in values.items() if cell.get("value") is not None)
+            line = f"{citation}: {cells[:400]}"
+            if len(line) > remaining:
+                incomplete = True
+                break
+            lines.append(line)
+            citations.append(citation)
+            remaining -= len(line)
+    if incomplete:
+        lines.append("Table context is incomplete; inspect or paginate the source table.")
+    return "\n".join(lines), citations, incomplete
 
 
 # Deterministic normalization is intentionally small and domain-specific. It does not
@@ -919,10 +1116,15 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
     if not trace:
         return Answer("The model did not call a document tool; no grounded answer is available.",
                       [], trace)
+    comparison = _checked_financial_comparison(conn, question, trace)
+    if comparison is not None:
+        return comparison
     if _needs_numeric_query(question):
         if numeric_args is None:
-            return Answer("A numerical BOQ tool result was not obtained; no numerical answer is available.",
-                          [], trace)
+            trace = [*trace, {"name": "host_numeric_fallback", "ok": True,
+                              "origin": "application",
+                              "reason": "Model did not call query_spreadsheet; application ran it"}]
+            numeric_args = {}
         return _verified_numeric_answer(conn, question, numeric_args, trace)
     if _needs_dates_query(question):
         if not date_called:
@@ -1005,6 +1207,9 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
     issues = [name for name, call in latest.items()
               if not call.get("ok", True) or call.get("incomplete")
               or (exhaustive and call.get("truncated"))]
+    issues.extend(call["name"] for call in trace
+                  if call.get("name") in {"host_table_context", "host_financial_context"}
+                  and call.get("incomplete"))
     if issues:
         result_text += "\n\nRetrieval may be incomplete: " + ", ".join(issues) + "."
     linked = bool(claims) and all(item["status"] == "evidence_linked" for item in claims)
@@ -1033,8 +1238,10 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
         return Answer("The model did not call a document tool; no grounded answer is available.", [], [])
     if _needs_numeric_query(question):
         if numeric_args is None:
-            return Answer("A numerical BOQ tool result was not obtained; no numerical answer is available.",
-                          [], trace)
+            trace = [*trace, {"name": "host_numeric_fallback", "ok": True,
+                              "origin": "application",
+                              "reason": "Model did not call query_spreadsheet; application ran it"}]
+            numeric_args = {}
         return _verified_numeric_answer(conn, question, numeric_args, trace)
     if _needs_dates_query(question):
         if not date_called:
@@ -1203,6 +1410,16 @@ def _scoped_question(question: str) -> str:
             + " ".join(f"[{index}] {part}." for index, part in enumerate(parts)))
 
 
+def _gemini_text(response: Any) -> str:
+    """Read text parts without treating a returned function call as answer text."""
+    candidates = getattr(response, "candidates", None) or []
+    if candidates and getattr(candidates[0], "content", None) is not None:
+        parts = getattr(candidates[0].content, "parts", None) or []
+        return "".join(part.text for part in parts
+                       if isinstance(getattr(part, "text", None), str)).strip()
+    return str(getattr(response, "text", "") or "").strip()
+
+
 def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 model_override: str | None = None) -> Answer:
     from google import genai
@@ -1235,7 +1452,40 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     handoff_chars = 0
     stalled = 0
     evidence_retry = False
+    format_retry = False
+    financial_context_sent = False
+    financial_context = ""
+    table_context_sent = False
+    table_context = ""
     deadline = time.monotonic() + 75
+
+    def compact_final(reason: str) -> str:
+        terms = {term for term in re.findall(r"\w+", question.casefold())
+                 if len(term) > 3}
+        ranked = sorted(_verified_sources(conn, citations), key=lambda cite: -sum(
+            term in (cite + " " + _evidence_text(get_evidence(conn, cite))).casefold()
+            for term in terms))
+        context, included = _evidence_handoff(conn, ranked, question, set(), budget=10000)
+        tool_calls.append({"name": reason, "ok": True, "origin": "application",
+                           "source_count": len(included), "visible_chars": len(context)})
+        prompt = (_scoped_question(question) +
+                  ("\n\nApplication-calculated worksheet totals:\n" + financial_context
+                   if financial_context else "") +
+                  ("\n\nOriginal matching worksheet rows:\n" + table_context
+                   if table_context else "") +
+                  "\n\nRetrieved original indexed evidence:\n" +
+                  (context or "No passage-level evidence was retrieved.") +
+                  "\n\nReturn only valid JSON with answer, insufficient, and claims. "
+                  "Cite these exact locations. If evidence is insufficient, say so. "
+                  "Do not calculate spreadsheet subtotals from selected preview rows.")
+        final_config = types.GenerateContentConfig(
+            system_instruction=SYSTEM, temperature=0,
+            response_mime_type="application/json")
+        final_response = client.models.generate_content(
+            model=model, contents=[types.Content(role="user", parts=[
+                types.Part.from_text(text=prompt)])], config=final_config)
+        return _gemini_text(final_response)
+
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
             return Answer("Provider time budget reached; narrow the question and retry.",
@@ -1243,8 +1493,12 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
         response = client.models.generate_content(model=model, contents=contents, config=config)
         calls = response.function_calls or []
         if not calls:
-            text = (response.text or "").strip()
+            text = _gemini_text(response)
             if _needs_numeric_query(question) and not _has_numeric_result(tool_calls):
+                if any(call.get("name") in TOOLS for call in tool_calls):
+                    return _source_linked_answer(conn, text, citations, tool_calls,
+                                                 question, numeric_args,
+                                                 _has_dates_result(tool_calls))
                 contents.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(
                     text="Call query_spreadsheet for the numeric BOQ filter before answering. "
@@ -1272,6 +1526,9 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 config = types.GenerateContentConfig(system_instruction=SYSTEM,
                                                      temperature=0)
                 continue
+            if citations and parsed is None and not format_retry and time.monotonic() < deadline:
+                format_retry = True
+                text = compact_final("gemini_format_recovery")
             return _source_linked_answer(conn, text, citations, tool_calls, question,
                                          numeric_args, _has_dates_result(tool_calls))
         if not response.candidates or response.candidates[0].content is None:
@@ -1317,6 +1574,31 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                                "source_count": len(handoff_citations),
                                "citations": handoff_citations,
                                "visible_chars": len(visible)})
+        if not financial_context_sent:
+            financial, financial_citations, incomplete = _financial_comparison_context(
+                conn, question)
+            if financial:
+                financial_context = financial
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                    text="Application-retrieved financial evidence:\n" + financial)]))
+                citations.extend(financial_citations)
+                tool_calls.append({"name": "host_financial_context", "ok": True,
+                                   "origin": "application", "incomplete": incomplete,
+                                   "source_count": len(financial_citations),
+                                   "visible_chars": len(financial)})
+                financial_context_sent = True
+        if not table_context_sent and not _cross_document_amount_question(question):
+            table, table_citations, incomplete = _matching_sheet_context(conn, question)
+            if table:
+                table_context = table
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                    text="Application-retrieved worksheet rows:\n" + table)]))
+                citations.extend(table_citations)
+                tool_calls.append({"name": "host_table_context", "ok": True,
+                                   "origin": "application", "incomplete": incomplete,
+                                   "source_count": len(table_citations),
+                                   "visible_chars": len(table)})
+                table_context_sent = True
         stalled = stalled + 1 if all_repeated else 0
         if stalled >= 2:
             return Answer("The provider repeated the same searches without new evidence. "
@@ -1329,16 +1611,15 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     if not tool_calls:
         return Answer("No document evidence was retrieved within the tool-call limit.", [],
                       tool_calls)
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(
-        text="Tool use is complete. Answer now as JSON using only the evidence already "
-             "retrieved. Cite exact passage or row references for each claim. If the "
-             "evidence is insufficient, set insufficient=true and say what is missing.")]))
+    if _needs_numeric_query(question) and numeric_args is None:
+        return _source_linked_answer(conn, "", citations, tool_calls, question,
+                                     numeric_args, _has_dates_result(tool_calls))
     if time.monotonic() >= deadline:
         return Answer("Provider time budget reached before answer generation.", [], tool_calls)
-    final_config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0)
-    response = client.models.generate_content(model=model, contents=contents,
-                                              config=final_config)
-    return _source_linked_answer(conn, (response.text or "").strip(), citations,
+    text = compact_final("gemini_tool_budget_final")
+    if citations and parse_answer(text) is None and time.monotonic() < deadline:
+        text = compact_final("gemini_format_recovery")
+    return _source_linked_answer(conn, text, citations,
                                  tool_calls, question, numeric_args,
                                  _has_dates_result(tool_calls))
 
@@ -1411,6 +1692,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     force_numeric = False
     format_retry = False
     evidence_retry = False
+    financial_context_sent = False
+    financial_context = ""
+    table_context_sent = False
+    table_context = ""
     native_schema = provider == "openai"
     parse_recovered = False
     cache: dict[str, dict[str, Any]] = {}
@@ -1521,6 +1806,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 trace.append({"name": "evidence_retry", "ok": True,
                               "reason": "Model reported insufficiency after source retrieval"})
                 messages = _compact_recovery_messages(conn, question, citations)
+                if financial_context:
+                    messages.append({"role": "user", "content": financial_context})
+                if table_context:
+                    messages.append({"role": "user", "content": table_context})
                 messages.append({"role": "user", "content":
                                  "Reassess whether the requested fact is present in these "
                                  "indexed excerpts. Return final JSON with exact citations. "
@@ -1534,6 +1823,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 trace.append({"name": "format_retry", "ok": True,
                               "reason": "Provider answer was not valid JSON; one generation retry"})
                 messages = _compact_recovery_messages(conn, question, citations)
+                if financial_context:
+                    messages.append({"role": "user", "content": financial_context})
+                if table_context:
+                    messages.append({"role": "user", "content": table_context})
                 messages.append({"role": "user", "content":
                                  "Return the answer as syntactically valid JSON only, with "
                                  "answer, insufficient, and claims. Each claim needs text "
@@ -1587,6 +1880,31 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                           "source_count": len(handoff_citations),
                           "citations": handoff_citations,
                           "visible_chars": len(visible)})
+        if not financial_context_sent:
+            financial, financial_citations, incomplete = _financial_comparison_context(
+                conn, question)
+            if financial:
+                financial_context = financial
+                messages.append({"role": "user", "content":
+                                 "Application-retrieved financial evidence:\n" + financial})
+                citations.extend(financial_citations)
+                trace.append({"name": "host_financial_context", "ok": True,
+                              "origin": "application", "incomplete": incomplete,
+                              "source_count": len(financial_citations),
+                              "visible_chars": len(financial)})
+                financial_context_sent = True
+        if not table_context_sent and not _cross_document_amount_question(question):
+            table, table_citations, incomplete = _matching_sheet_context(conn, question)
+            if table:
+                table_context = table
+                messages.append({"role": "user", "content":
+                                 "Application-retrieved worksheet rows:\n" + table})
+                citations.extend(table_citations)
+                trace.append({"name": "host_table_context", "ok": True,
+                              "origin": "application", "incomplete": incomplete,
+                              "source_count": len(table_citations),
+                              "visible_chars": len(table)})
+                table_context_sent = True
         if _has_numeric_result(trace):
             force_numeric = False
         stalled = stalled + 1 if all_repeated else 0
@@ -1605,6 +1923,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
         return Answer("Provider time budget reached before answer generation.", [], trace)
     final_messages = (_compact_recovery_messages(conn, question, citations)
                       if provider == "groq" else messages)
+    if provider == "groq" and financial_context:
+        final_messages.append({"role": "user", "content": financial_context})
+    if provider == "groq" and table_context:
+        final_messages.append({"role": "user", "content": table_context})
     final_messages.append({"role": "user", "content":
                            "Tool use is complete. Answer with JSON only from retrieved evidence."})
     request = {"model": model, "messages": final_messages, "tool_choice": "none",
