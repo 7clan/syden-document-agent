@@ -128,8 +128,21 @@ user can inspect the problem. Malformed model output is also unverified.
 Financial BOQ filtering, strict thresholds and totals still come from Python's
 read-only `query_spreadsheet` tool. Its exact source cells and arithmetic are
 checked independently and labeled **deterministically calculated** when coverage
-is complete. Candidate date extraction likewise remains a tool result; nearby
-text does not automatically prove a contractual obligation.
+is complete. If a model retrieves documents but omits the required numeric tool,
+the application runs a read-only deterministic fallback and labels that action
+as application initiated in the audit trace. Candidate date extraction likewise
+remains a tool result; nearby text does not automatically prove a contractual obligation.
+
+For a BOQ-subtotal-versus-contract comparison, the application retrieves each
+worksheet total separately and an explicit original contract value from indexed
+PDF text. If one base worksheet and one contract value are unambiguous, Python
+compares those operands and cites the original amount cells and PDF passage.
+This answer is labeled **evidence-linked** because identifying the intended
+worksheet and contract clause still depends on document wording. If the operands
+cannot be selected reliably, the application does not label model arithmetic as
+deterministically verified. Small matching worksheets, such as milestone registers,
+are supplied with all their indexed rows when they fit the context budget; larger
+tables are marked incomplete.
 
 The model still calls read-only document tools before answering. Repeated calls
 are cached and bounded. Every new search returns its query-relevant excerpt,
@@ -315,6 +328,12 @@ The later identical-document Gemma 4 31B, Ollama GPT-OSS 120B, and Groq GPT-OSS
 120B checks are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md). They are a
 small synthetic sample; the reported Ollama false absence and Groq HTTP 400 did
 not recur on those checks.
+The focused six-document acceptance fixes passed **251 tests with 1 skipped** and
+Ruff locally. Gemini and Ollama Cloud answered the three focused questions
+correctly against the original sources; Groq returned HTTP 429 before a focused
+answer. A separate four-document fictional held-out evaluation is recorded in
+[docs/TEST_PLAN.md](docs/TEST_PLAN.md). Passing those samples does not guarantee
+accuracy on arbitrary documents; evidence-linked answers still need source review.
 
 ### Observed provider checks (2026-10-19)
 

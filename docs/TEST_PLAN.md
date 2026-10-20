@@ -310,3 +310,59 @@ The earlier Ollama false absence and Groq HTTP 400 were not reproduced in these
 three live calls. This small sample cannot establish a false-refusal rate or
 guarantee unseen document performance. Groq HTTP 400 code/phase display is
 covered by mocked errors; no actual HTTP 400 occurred in this retest.
+
+## Focused six-document acceptance and separate held-out run (2026-10-20)
+
+The acceptance index contained exactly the six fictional files requested for
+questions 9–11: three PDFs, two XLSX workbooks and one DOCX. Original values were
+read from the source files and the local index, not inferred from answer status:
+`04_Electrical_BOQ.xlsx` / `Electrical BOQ` has seven amount cells F2–F8 totaling
+SAR 5,934,500; its separate `Change Order BOQ` has SAR 320,000 at F2;
+`01_Main_Contract.pdf` page 2 states the original contract value of SAR 6,750,000.
+The schedule's `Milestones` rows 2–6 contain M-01 through M-05, with rows 5 and
+6 marked planning target and unapproved proposal respectively.
+
+| Question | Gemini 3.5 Flash Lite | Ollama GPT-OSS 120B | Groq GPT-OSS 20B |
+| --- | --- | --- | --- |
+| 9: EL-103 above SAR 1m? | Pass: No, SAR 890,000 at F4; application numeric fallback recorded | Pass: No, SAR 890,000 at F4 | Untested: HTTP 429 on first attempted focused call |
+| 10: BOQ subtotal versus original contract | Pass: Python compared SAR 5,934,500 with SAR 6,750,000; nine source locations | Pass: same values and result | Untested after rate limit |
+| 11: contractual versus planning milestones | Pass: M-01–M-05 with rows 2–6 | Pass: M-01–M-05 with rows 2–6 | Untested after rate limit |
+
+The prior Ollama model output had merged base and change-order sheets and cited
+real cells. A real citation did not make that sum correct. The new comparison is
+application-calculated from separately queried worksheet and PDF operands; its
+audit event says `origin: application`, and its answer remains `evidence_linked`
+to avoid claiming semantic certainty about source selection. Gemini's missing
+numeric tool call now triggers a separately labeled application fallback.
+Gemini's empty final answer after retrieval has one compact JSON recovery; an
+empty recovery still returns no invented claim. The local offline suite passed
+251 tests with 1 skipped and Ruff before publication.
+
+Representative earlier questions were rerun: contract scope (question 2) and
+the strict BOQ threshold and SAR 4,335,000 sum (question 8) passed on both
+Gemini and Ollama. Ollama also answered the proposed handover status (question
+12) and the contractual-versus-proposed dates (question 18); its answer to 12
+did not restate the unchanged contractual date, so that answer remains partial
+against the full expected text. The other 18-question rows were not rerun.
+
+After the fixes, a separate ignored folder `.local/unfamiliar_final` was
+generated with a new fictional contract PDF, two Excel registers and Word site
+decisions. These files and values were not used to develop the fixes. Its
+original-work sheet has three cost rows totaling SAR 2,160,000, a separate
+revision sheet has SAR 90,000, and the PDF states an original contract sum of
+SAR 2,480,000. The delivery sheet contains two contractual gates, one planning
+target and one unapproved proposal. The five held-out questions checked the
+contract/BOQ comparison, a strict SAR 1m threshold, gate classification,
+approval of a proposed date, and original scope:
+
+| Provider | Held-out result | Material limitation |
+| --- | --- | --- |
+| Gemini 3.5 Flash Lite | 5/5 correct against original sources | These five prompts do not estimate accuracy on arbitrary documents |
+| Ollama GPT-OSS 120B | 4 correct, 1 partial | Scope answer omitted the PDF's quantities of two panels and 85 metres of cable |
+| Groq GPT-OSS 20B | Not run | Account returned HTTP 429 on the focused acceptance attempt |
+
+All generated files, local indexes and raw answer logs are under ignored
+`.local/`; no credentials or source documents are committed. The held-out run
+exposed no incorrect calculation, but an evidence-linked scope summary can
+still omit facts. This evaluation does not establish complete coverage of
+unfamiliar documents or prove arbitrary model interpretations.
