@@ -188,6 +188,61 @@ class ProviderRateLimitError(RuntimeError):
         super().__init__(f"{label} rate limit reached.{suffix}")
 
 
+class ProviderOutputParseError(RuntimeError):
+    """Groq could not parse a tool call or final response; hide its generated text."""
+
+    def __init__(self, phase: str):
+        detail = ("a tool-capable request" if phase == "tool" else "the final answer")
+        super().__init__(f"Groq could not parse {detail}. Retry with a shorter question "
+                         "or choose another tool-capable model.")
+
+
+def _provider_error_code(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error", body)
+        if isinstance(error, dict):
+            return str(error.get("code") or "")
+    return ""
+
+
+def _output_parse_failed(exc: Exception) -> bool:
+    return (getattr(exc, "status_code", None) == 400
+            and _provider_error_code(exc) == "output_parse_failed")
+
+
+def _schema_unsupported(exc: Exception) -> bool:
+    if _output_parse_failed(exc):
+        return False
+    body = getattr(exc, "body", None)
+    message = (body.get("message", "") if isinstance(body, dict) else
+               str(exc) if isinstance(exc, ValueError) else "")
+    return bool(re.search(r"response.format|json.schema|structured.output",
+                          str(message), re.IGNORECASE))
+
+
+def safe_provider_error(exc: Exception, provider: str) -> str:
+    """Return a user-facing error that never includes API bodies or reasoning."""
+    if isinstance(exc, (ProviderRateLimitError, ProviderOutputParseError)):
+        return str(exc)
+    if isinstance(exc, ValueError) and getattr(exc, "status_code", None) is None:
+        message = str(exc)
+        if message.startswith(("Missing LLM configuration:", "GEMINI_API_KEY missing.",
+                               "A Gemini model ID is required.", "Model ID cannot be empty.",
+                               "Unsupported LLM_PROVIDER:")):
+            return message
+    label = {"groq": "Groq", "ollama_cloud": "Ollama Cloud", "openai": "OpenAI",
+             "gemini": "Gemini", "compatible": "Model provider"}.get(provider, "Model provider")
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return f"{label} rate limit reached. Please retry shortly."
+    if status == 400:
+        return f"{label} rejected the request (HTTP 400). Check the model ID and tool support."
+    if isinstance(status, int) and status >= 500:
+        return f"{label} is temporarily unavailable (HTTP {status}). Please retry shortly."
+    return f"{label} request failed. Check the connection and selected model, then retry."
+
+
 def _retry_after_seconds(exc: Exception) -> float | None:
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None) or getattr(exc, "headers", None) or {}
@@ -1140,7 +1195,7 @@ def _compatible_config(provider: str, model_override: str | None = None) -> tupl
     configs = {
         "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL", "gpt-4.1-mini", ""),
         "groq": ("GROQ_API_KEY", "GROQ_MODEL", "GROQ_BASE_URL",
-                 "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1"),
+                 "openai/gpt-oss-20b", "https://api.groq.com/openai/v1"),
         "ollama_cloud": ("OLLAMA_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL",
                          "", "https://ollama.com/v1"),
         "compatible": ("COMPATIBLE_API_KEY", "COMPATIBLE_MODEL", "COMPATIBLE_BASE_URL", "", ""),
@@ -1158,6 +1213,38 @@ def _compatible_config(provider: str, model_override: str | None = None) -> tupl
     if missing:
         raise ValueError("Missing LLM configuration: " + ", ".join(missing))
     return key, model, base_url
+
+
+_GROQ_STRICT_MODELS = {"openai/gpt-oss-20b", "openai/gpt-oss-120b",
+                       "qwen/qwen3.8-27b"}
+
+
+def _answer_format(provider: str, model: str,
+                   native_schema: bool = False) -> dict[str, Any] | None:
+    """Strict output is sent only on a request without tools for Groq."""
+    if native_schema or (provider == "groq" and model in _GROQ_STRICT_MODELS):
+        return {"type": "json_schema", "json_schema": {
+            "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
+    return None
+
+
+def _compact_recovery_messages(conn: sqlite3.Connection, question: str,
+                               citations: list[str]) -> list[dict[str, str]]:
+    """Rebuild a retry from indexed evidence, without failed output or tool history."""
+    snippets: list[str] = []
+    for cite in _verified_sources(conn, citations):
+        if cite.endswith(" | document"):
+            continue
+        evidence = get_evidence(conn, cite)
+        excerpt = _evidence_text(evidence).strip()
+        if excerpt:
+            snippets.append(f"{cite}: {excerpt[:500]}")
+        if len(snippets) >= 16:
+            break
+    context = "\n".join(snippets) or "No passage-level evidence retrieved yet."
+    return [{"role": "system", "content": SYSTEM},
+            {"role": "user", "content": _scoped_question(question)},
+            {"role": "user", "content": "Previously retrieved indexed evidence:\n" + context}]
 
 
 def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
@@ -1179,57 +1266,104 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     force_numeric = False
     format_retry = False
     native_schema = provider == "openai"
+    parse_recovered = False
     cache: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
     stalled = 0
     deadline = time.monotonic() + 75
+
+    def send(request: dict[str, Any], phase: str) -> Any:
+        nonlocal parse_recovered
+        try:
+            return _rate_limited_create(client.chat.completions.create,
+                                        request, provider, deadline)
+        except Exception as exc:
+            if provider != "groq" or not _output_parse_failed(exc):
+                raise
+            if parse_recovered:
+                raise ProviderOutputParseError(phase) from None
+            parse_recovered = True
+            need_numeric = _needs_numeric_query(question) and not _has_numeric_result(trace)
+            need_dates = _needs_dates_query(question) and not _has_dates_result(trace)
+            precise = [cite for cite in _verified_sources(conn, citations)
+                       if not cite.endswith(" | document")]
+            retry_as_tool = phase == "tool" and (need_numeric or need_dates or not precise)
+            compact = _compact_recovery_messages(conn, question, citations)
+            if retry_as_tool:
+                compact.append({"role": "user", "content":
+                                "Call the needed document tool now. Do not answer before "
+                                "retrieving evidence."})
+                choice: Any = ({"type": "function", "function": {
+                    "name": "query_spreadsheet"}} if need_numeric else
+                    {"type": "function", "function": {"name": "extract_dates"}}
+                    if need_dates else "auto")
+                recovery = {"model": model, "messages": compact, "tools": schemas,
+                            "tool_choice": choice, "temperature": 0}
+            else:
+                compact.append({"role": "user", "content":
+                                "Return final JSON only, using the indexed evidence above. "
+                                "Cite only exact retrieved references."})
+                recovery = {"model": model, "messages": compact,
+                            "tool_choice": "none", "temperature": 0}
+                answer_format = _answer_format(provider, model)
+                if answer_format:
+                    recovery["response_format"] = answer_format
+            trace.append({"name": "provider_parse_recovery", "ok": True,
+                          "phase": phase, "mode": "tool" if retry_as_tool else "final",
+                          "reason": "Groq output_parse_failed; one compact retry"})
+            try:
+                return _rate_limited_create(client.chat.completions.create,
+                                            recovery, provider, deadline)
+            except Exception as retry_exc:
+                if _output_parse_failed(retry_exc):
+                    raise ProviderOutputParseError("tool" if retry_as_tool else "final") from None
+                raise
+
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
             return Answer("Provider time budget reached; narrow the question and retry.",
                           [], trace)
         request = {
-            "model": model, "messages": messages, "tools": schemas,
+            "model": model, "messages": messages,
             "tool_choice": ("none" if format_retry else
                             {"type": "function", "function": {"name": "query_spreadsheet"}}
                             if force_numeric else "auto"), "temperature": 0,
         }
-        if native_schema:
-            request["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
+        if not format_retry:
+            request["tools"] = schemas
+        answer_format = _answer_format(provider, model, native_schema)
+        if answer_format and (provider != "groq" or format_retry):
+            request["response_format"] = answer_format
         try:
-            response = _rate_limited_create(client.chat.completions.create,
-                                            request, provider, deadline)
+            response = send(request, "final" if format_retry else "tool")
         except Exception as exc:  # Retry only unsupported schema errors.
-            if not native_schema or not re.search(
-                    r"response.format|json.schema|structured.output", str(exc), re.IGNORECASE):
+            if not native_schema or not _schema_unsupported(exc):
                 raise
             native_schema = False
             request.pop("response_format")
             trace.append({"name": "structured_output_fallback", "ok": True,
                           "reason": "Native JSON schema unavailable; instructed JSON remains required"})
-            response = _rate_limited_create(client.chat.completions.create,
-                                            request, provider, deadline)
+            response = send(request, "final" if format_retry else "tool")
         msg = response.choices[0].message
         if not msg.tool_calls:
             text = (msg.content or "").strip()
             if _needs_numeric_query(question) and not _has_numeric_result(trace):
-                messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content":
                                  "Call query_spreadsheet with the BOQ numeric filter before "
                                  "answering. Use strict greater-than for 'above'."})
                 force_numeric = True
                 continue
             if _needs_dates_query(question) and not _has_dates_result(trace):
-                messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content": "Call extract_dates before answering."})
                 continue
             if (citations and not _needs_numeric_query(question)
                     and not _needs_dates_query(question)
-                    and parse_answer(text) is None and not format_retry):
+                    and parse_answer(text) is None and not format_retry
+                    and not parse_recovered):
                 format_retry = True
                 trace.append({"name": "format_retry", "ok": True,
                               "reason": "Provider answer was not valid JSON; one generation retry"})
-                messages.append({"role": "assistant", "content": text})
+                messages = _compact_recovery_messages(conn, question, citations)
                 messages.append({"role": "user", "content":
                                  "Return the answer as syntactically valid JSON only, with "
                                  "answer, insufficient, and claims. Each claim needs text "
@@ -1243,9 +1377,13 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
         for call in msg.tool_calls:
             try:
                 args = json.loads(call.function.arguments)
-            except json.JSONDecodeError:
+                if not isinstance(args, dict):
+                    raise TypeError("Tool arguments must be a JSON object")
+            except (json.JSONDecodeError, TypeError, ValueError):
                 args = {}
-            result, repeated = _cached_tool(conn, call.function.name, args, cache)
+                result, repeated = {"error": "Malformed tool arguments JSON"}, False
+            else:
+                result, repeated = _cached_tool(conn, call.function.name, args, cache)
             all_repeated &= repeated
             if call.function.name == "query_spreadsheet" and "error" not in result:
                 numeric_args = args
@@ -1274,20 +1412,18 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     if not trace:
         return Answer("No document evidence was retrieved within the tool-call limit.", [],
                       trace)
-    messages.append({"role": "user", "content":
-                     "Tool use is complete. Answer now as JSON using only the evidence "
-                     "already retrieved. Cite exact passage or row references for each "
-                     "claim. If evidence is insufficient, set insufficient=true and say "
-                     "what is missing."})
     if time.monotonic() >= deadline:
         return Answer("Provider time budget reached before answer generation.", [], trace)
-    request = {"model": model, "messages": messages, "tool_choice": "none",
+    final_messages = (_compact_recovery_messages(conn, question, citations)
+                      if provider == "groq" else messages)
+    final_messages.append({"role": "user", "content":
+                           "Tool use is complete. Answer with JSON only from retrieved evidence."})
+    request = {"model": model, "messages": final_messages, "tool_choice": "none",
                "temperature": 0}
-    if native_schema:
-        request["response_format"] = {"type": "json_schema", "json_schema": {
-            "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
-    response = _rate_limited_create(client.chat.completions.create,
-                                    request, provider, deadline)
+    answer_format = _answer_format(provider, model, native_schema)
+    if answer_format:
+        request["response_format"] = answer_format
+    response = send(request, "final")
     return _source_linked_answer(conn, (response.choices[0].message.content or "").strip(),
                                  citations, trace, question, numeric_args,
                                  _has_dates_result(trace))

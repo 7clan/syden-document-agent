@@ -1,9 +1,9 @@
 # Development note for SYDEN
 
-I used OpenAI Codex inside VS Code as my AI coding agent. As of 19 October 2026,
-I estimate **2–3 hours of my own work** on planning, working with Codex, reviewing
-the implementation, testing, and addressing issues. Development is ongoing, so I
-will update that estimate before submission rather than present it as a final time log.
+I used OpenAI Codex inside VS Code as my AI coding agent. As of 20 October 2026,
+I estimate **6–8 hours of my own involvement** in planning, working with Codex,
+reviewing changes, testing the application, troubleshooting API and verification
+issues, and checking results. Development is ongoing, so this is not a final time log.
 
 Codex helped inspect the starter repository, implement the Python ingestion and
 query modules, integrate LLM function calling, and write synthetic regression
@@ -19,15 +19,13 @@ uses genuine provider function calls to request evidence; Python checks amounts,
 currency, thresholds, and totals. Gemini, OpenAI, Groq, and Ollama Cloud remain
 configurable through environment variables.
 
-I later changed prose verification to claim-level source quotations and local
-checks. This avoids a verification-only model request. Exact extracted wording
-and Python calculations can be checked deterministically; a paraphrased legal
-or technical interpretation is shown as evidence-linked, with the source and
-the remaining uncertainty visible. My earlier 2–3 hour estimate has not been
-updated for this additional work and must be revised before submission.
+I later replaced the active prose verifier with source-linked claims: Python
+checks that cited locations were retrieved and displays their indexed text or
+cells, while making no guarantee about the model's interpretation. There is no
+verification-only model request. Spreadsheet filtering and totals remain
+deterministic. The interface also lets a reviewer open the cited location.
 
-With more time I would add OCR for scanned PDFs, improve extraction of complex
-merged or borderless BOQ tables, measure retrieval quality on a larger unseen
-document set, and test the final submission on a fresh machine. I would also
-review each real customer document's confidentiality requirements before sending
-any content to a hosted model.
+With more time I would add OCR for scanned PDFs, improve complex BOQ extraction,
+measure retrieval accuracy on more unseen documents, and test the submission on
+a fresh machine. I would also review confidentiality requirements before sending
+any real customer content to a hosted model.

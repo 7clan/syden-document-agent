@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -10,7 +11,8 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from syden_agent.agent import ask
+from syden_agent import model_catalog
+from syden_agent.agent import ask, safe_provider_error
 from syden_agent.db import connect
 from syden_agent.file_manager import folder_files, remove_document
 from syden_agent.ingest import ingest_folder
@@ -20,6 +22,15 @@ from syden_agent.ui_format import display_safe_rows
 from syden_agent.uploads import save_uploaded_file
 
 load_dotenv()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_model_catalog(provider: str, key_fingerprint: str,
+                          _api_key: str) -> model_catalog.ModelCatalog:
+    """Cache the account's model list without making it part of every UI rerun."""
+    return model_catalog.discover_models(provider, _api_key)
+
+
 st.set_page_config(page_title="SYDEN Document Agent", page_icon="📄", layout="wide")
 st.title("Project Document Agent")
 st.caption("PDFs + Excel + Word · Evidence-grounded answers · Read-only tool calling")
@@ -27,7 +38,7 @@ conn = connect(os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
 PROVIDERS = {
     "gemini": ("Google Gemini", "GEMINI_API_KEY", "GEMINI_MODEL", "gemini-2.5-flash"),
     "groq": ("Groq", "GROQ_API_KEY", "GROQ_MODEL", "openai/gpt-oss-20b"),
-    "ollama_cloud": ("Ollama Cloud", "OLLAMA_API_KEY", "OLLAMA_MODEL", "gpt-oss:20b-cloud"),
+    "ollama_cloud": ("Ollama Cloud", "OLLAMA_API_KEY", "OLLAMA_MODEL", "gpt-oss:20b"),
     "openai": ("OpenAI", "OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4.1-mini"),
     "compatible": ("Other compatible API", "COMPATIBLE_API_KEY",
                    "COMPATIBLE_MODEL", ""),
@@ -44,19 +55,68 @@ with st.sidebar:
     )
     provider_label, api_key_var, model_var, tested_model = PROVIDERS[provider]
     configured_model = os.getenv(model_var, "").strip()
-    model_options = list(dict.fromkeys(
-        candidate for candidate in (configured_model, tested_model) if candidate
-    ))
+    api_key = os.getenv(api_key_var, "").strip()
+    has_key = bool(api_key)
+    discovered = None
+    if provider in {"groq", "ollama_cloud"}:
+        if st.button("Refresh models"):
+            _cached_model_catalog.clear()
+        fingerprint = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "no-key"
+        discovered = _cached_model_catalog(provider, fingerprint, api_key)
+        if discovered.warning:
+            st.warning(discovered.warning)
+        if not discovered.models and has_key:
+            st.warning("No compatible tool-calling models were listed for this provider. "
+                       "You can enter a model ID manually after checking its capabilities.")
+        model_options = [choice.id for choice in discovered.models]
+        model_labels = {choice.id: f"{choice.name} ({choice.id})"
+                        for choice in discovered.models}
+        if configured_model and configured_model not in model_options:
+            model_options.append(configured_model)
+            model_labels[configured_model] = f"Configured: {configured_model} (not listed)"
+    else:
+        model_options = list(dict.fromkeys(
+            candidate for candidate in (configured_model, tested_model) if candidate
+        ))
+        model_labels = {candidate: candidate for candidate in model_options}
+    model_key = f"model_{provider}"
+    previous_model = (st.session_state.get(model_key) or
+                      st.session_state.get(f"_saved_{model_key}"))
+    if (previous_model and previous_model != CUSTOM_MODEL
+            and previous_model not in model_options):
+        model_options.append(previous_model)
+        model_labels[previous_model] = f"Previously selected: {previous_model} (not listed)"
     model_options.append(CUSTOM_MODEL)
-    model_choice = st.selectbox("Model", model_options, key=f"model_{provider}")
-    selected_model = (st.text_input("Model ID", key=f"custom_model_{provider}").strip()
-                      if model_choice == CUSTOM_MODEL else model_choice)
-    has_key = bool(os.getenv(api_key_var, "").strip())
+    default_model = (CUSTOM_MODEL if discovered and discovered.source == "live"
+                     and not discovered.models else model_options[0])
+    model_choice = st.selectbox("Model", model_options, key=model_key,
+                                index=(model_options.index(previous_model)
+                                       if previous_model in model_options else
+                                       model_options.index(default_model)),
+                                format_func=lambda value: model_labels.get(value, value))
+    st.session_state[f"_saved_{model_key}"] = model_choice
+    if model_choice == CUSTOM_MODEL:
+        manual_key = f"custom_model_{provider}"
+        selected_model = st.text_input(
+            "Model ID", key=manual_key,
+            value=st.session_state.get(f"_saved_{manual_key}", "")).strip()
+        st.session_state[f"_saved_{manual_key}"] = selected_model
+    else:
+        selected_model = model_choice
+    unsupported_model = bool(discovered and selected_model in discovered.unsupported)
+    if unsupported_model:
+        st.warning("This model is listed without the tool-calling capability SYDEN needs.")
+    elif (discovered and selected_model and model_choice != CUSTOM_MODEL
+          and selected_model not in {choice.id for choice in discovered.models}):
+        st.warning("This model ID was not in the current compatible model list. "
+                   "Verify tool calling before using it.")
+    elif discovered and model_choice == CUSTOM_MODEL and selected_model:
+        st.warning("Manual model ID: tool-calling support has not been confirmed.")
     if not has_key:
         st.info(f"Add {api_key_var} to your local .env to use this provider.")
     if provider == "compatible" and not os.getenv("COMPATIBLE_BASE_URL", "").strip():
         st.info("Other compatible APIs also need COMPATIBLE_BASE_URL in .env.")
-    ready_to_ask = bool(has_key and selected_model and
+    ready_to_ask = bool(has_key and selected_model and not unsupported_model and
                         (provider != "compatible" or
                          os.getenv("COMPATIBLE_BASE_URL", "").strip()))
     selection = (provider, selected_model)
@@ -238,7 +298,7 @@ if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
         try:
             answer = ask(conn, question, provider=provider, model=selected_model)
         except Exception as exc:  # noqa: BLE001 - show provider errors in the UI
-            st.error(f"Agent error: {exc}")
+            st.error(safe_provider_error(exc, provider))
         else:
             st.session_state["last_answer"] = answer
             st.session_state.pop("csv_export", None)

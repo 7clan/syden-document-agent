@@ -40,7 +40,7 @@ def test_hosted_llama_provider_configuration(monkeypatch):
     monkeypatch.delenv("GROQ_BASE_URL", raising=False)
     key, model, url = _compatible_config("groq")
     assert key == "test-only-not-real"
-    assert model == "llama-3.3-70b-versatile"
+    assert model == "openai/gpt-oss-20b"
     assert url == "https://api.groq.com/openai/v1"
 
 

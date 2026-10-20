@@ -239,3 +239,40 @@ success is **not verified**. The deterministic BOQ result and Gemini BOQ run
 passed. These results are a small live sample, not a guarantee on arbitrary
 documents. Source-linked model claims can still be factually wrong even when
 their cited locations exist; the interface labels that distinction explicitly.
+
+## Groq parsing and model discovery check (2026-10-20)
+
+The attached Streamlit trace showed a Groq HTTP 400 `output_parse_failed` on a
+tool-capable date-question continuation. Its `failed_generation` was planning
+text. The API error did not identify whether the model was attempting another
+tool call or a final answer, so the failure is classified by request mode rather
+than guessed from that unparsed text. A pre-change live reproduction of the same
+question succeeded in two Groq requests; the error is intermittent. The revised
+path retries at most once with compact indexed evidence, can force a needed tool
+call, and uses Groq strict JSON schema only for a tool-free final response.
+Offline tests simulate tool-call parsing failures, final-response parsing
+failures, malformed tool arguments, a second failed retry, other HTTP 400s,
+429 separation, strict JSON, a contract citation, and deterministic BOQ results.
+
+One post-change live Groq `openai/gpt-oss-20b` date query used `extract_dates`
+and two `get_evidence` calls, then returned a cited, evidence-linked answer
+distinguishing contractual deadlines, planning targets, and other dates. The
+next live Groq contract question received HTTP 429 with an approximately
+1,369-second retry suggestion. No further Groq generation calls were made.
+A Gemini `gemini-3.5-flash-lite` contract-scope check then searched six times
+and returned insufficient evidence despite the local index containing the
+scope passage. That is an observed model-orchestration false refusal; it is not
+counted as a passing contract test. The offline deterministic BOQ query on
+`04_Electrical_BOQ.xlsx` returned three SAR rows above 1,000,000 at cells F2,
+F3, and F6, totaling SAR 4,335,000. These two checks do not establish live
+Groq success for those questions.
+
+One live model-list request through the new discovery code returned three
+Groq text/tool models: `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, and
+`qwen/qwen3.8-27b`. Ollama Cloud returned 22 models with both `completion`
+and `tools`, including the seven requested families. These are advertised
+capabilities and exact direct API IDs, not a live tool-call test of every model.
+One additional synthetic smoke test used the discovered direct Ollama ID
+`gpt-oss:20b`: it called `search_documents` and returned the fictional
+ARBOR-17 code with an indexed PDF citation in about 8 seconds. Other listed
+Ollama models remain untested for actual tool-call reliability.

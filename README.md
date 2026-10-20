@@ -153,6 +153,14 @@ A structured response now needs only a claim and retrieved citation:
 
 Groq and other compatible providers retry one HTTP 429 only when its `retry-after`
 delay fits the bounded request budget; otherwise the app displays a wait message.
+Groq HTTP 400 `output_parse_failed` is handled separately. The agent makes at
+most one compact recovery request without including the provider's unparsed
+generation. If a tool-capable request fails before useful evidence is retrieved,
+the retry still uses real function calling. If evidence is already available,
+the retry requests a final answer with tools disabled. GPT-OSS 20B/120B and
+Qwen 3.8 27B use Groq's strict JSON schema on these tool-free final requests.
+An unrecoverable parsing failure produces a short error without the provider's
+`failed_generation` text. No failed output is treated as source evidence.
 Ollama Cloud may not enforce structured output, so its JSON formatting still
 needs live checking with the selected model.
 
@@ -161,9 +169,16 @@ needs live checking with the selected model.
 The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
 **Model** dropdown. You can switch between Gemini, Groq, Ollama Cloud, OpenAI, or a
 custom OpenAI Chat Completions-compatible service without restarting the app.
-The model dropdown offers the model configured in your local `.env`, a documented
-default to try (availability depends on your account), and **Other model ID**
-for an exact model name. Switching providers/models clears the previous response.
+Groq and Ollama Cloud model dropdowns use their official model-list APIs. Groq
+models must advertise text input/output and the `tools` feature; Ollama Cloud
+models must advertise both `completion` and `tools`. Each choice shows a friendly
+name and the exact API ID. The list is cached for 15 minutes; **Refresh models**
+fetches it again. A model-list failure shows fallback IDs with a warning, while
+a successful empty list shows no compatible models. Configured and previously
+selected IDs remain available with a compatibility warning if they disappear
+from the live list. **Other model ID (enter manually)** remains available.
+The last selected model is remembered separately for each provider during the
+session. Switching providers/models clears the previous response.
 The selected provider/model are passed to each question; the app does not rewrite
 environment variables or disclose your API keys.
 
@@ -172,17 +187,17 @@ to your local `.env` before selecting a provider. A provider without its key
 is shown but the **Ask agent** button remains disabled. For Groq, Ollama Cloud,
 OpenAI and other compatible APIs, install the optional client:
 `python -m pip install -e ".[openai,dev]"`.
-The Streamlit sidebar reflects configured model IDs, but it cannot guarantee
-that a particular account can call them. Test real function calling using
+The listing metadata identifies advertised tool support; it cannot guarantee
+reliable function calling in a specific live question. Test using
 `syden-agent smoke --provider <provider>` or a real question.
 
 For OpenAI as provider, install `pip install -e ".[openai,dev]"`, set `LLM_PROVIDER=openai`
 and `OPENAI_API_KEY` in `.env`.
 
-For **Llama through Groq**, install `pip install -e ".[llama,dev]"`, then set
-`LLM_PROVIDER=groq` and `GROQ_API_KEY` in `.env`. The default Groq Llama model ID is
-`llama-3.3-70b-versatile`; verify it is available for your account before the demo.
-This is a hosted Llama API, not Ollama running locally.
+For **Groq**, install `pip install -e ".[llama,dev]"`, then set
+`LLM_PROVIDER=groq` and `GROQ_API_KEY` in `.env`. The default model ID is
+`openai/gpt-oss-20b`; the dropdown discovers other account-accessible models,
+including hosted Llama when available. This is a hosted API, not Ollama running locally.
 
 For another OpenAI Chat Completions-compatible provider, use `LLM_PROVIDER=compatible`
 and set `COMPATIBLE_API_KEY`, `COMPATIBLE_MODEL`, `COMPATIBLE_BASE_URL`.
@@ -193,9 +208,12 @@ For **Ollama Cloud direct API**, install `pip install -e ".[openai,dev]"`, set
 `LLM_PROVIDER=ollama_cloud`, `OLLAMA_API_KEY`, and `OLLAMA_MODEL` in `.env`.
 The adapter uses the [documented](https://docs.ollama.com/api/openai-compatibility)
 `https://ollama.com/v1` Chat Completions endpoint.
-Ollama documents API-level tool support. The example model `gpt-oss:20b-cloud`
-passed a real synthetic tool-call smoke test with the provided account; check your
-own configured model before a demo.
+The dropdown uses exact IDs returned by `https://ollama.com/api/tags` for direct
+cloud access, such as `gpt-oss:20b`; an older configured `:cloud` alias remains
+selectable but is flagged when it is absent from the current list. Ollama
+documents API-level tool support. The discovered `gpt-oss:20b` ID passed a real
+synthetic tool-call smoke test with the configured account; check your own
+selected model before a demo.
 
 ### Environment variables
 
@@ -273,6 +291,13 @@ local suite passed **219 tests with 1 skipped** and Ruff passed. A live
 `gemini-3.5-flash-lite` retest answered the five-milestone demo question with
 schedule rows 2–6. An Ollama Cloud retest returned HTTP 500, and a second
 attempt returned empty answer content; its live result remains unconfirmed.
+After Groq parse-error handling and model discovery, the local test results are
+recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md). The live Groq date query
+completed with citations; the next Groq call hit a provider 429, so the contract
+and BOQ questions were checked separately without claiming live Groq success.
+The discovered Ollama direct API ID `gpt-oss:20b` passed a synthetic
+`search_documents` tool-call smoke check; other listed Ollama models have not
+been checked for live tool-call reliability.
 
 ### Observed provider checks (2026-10-19)
 
@@ -298,7 +323,7 @@ Lite model returned 404 and the suggested replacement also returned 503.
 - PDF table extraction is heuristic. Borderless text-line BOQs are flagged for visual review, and rows without a verified currency are omitted from currency-filtered totals.
 - Complex merged Excel headings and unusual BOQ layouts still need human inspection of the selected column and warnings.
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
-- Groq-hosted Llama and OpenAI have not been live-tested with accessible models/keys.
+- Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.
 - Missing-cache `.xlsx`/`.xlsm` formulas are flagged; calculation remains out of scope.
 - Legacy `.xls` formulas expose only their stored result through `xlrd`; formula expressions are not available. An absent cached result is never calculated. Password-protected `.xls` files cannot be read.

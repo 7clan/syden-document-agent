@@ -7,7 +7,7 @@ import os
 
 from dotenv import load_dotenv
 
-from .agent import ask
+from .agent import ask, safe_provider_error
 from .db import connect
 from .ingest import ingest_folder
 from .tools import extract_dates, list_documents, query_spreadsheet
@@ -80,7 +80,8 @@ def main() -> None:
                           "verification_status": answer.verification_status,
                           "tool_calls": answer.tool_calls}
             except Exception as exc:  # noqa: BLE001 - report hosted API failures cleanly
-                result = {"success": False, "error": str(exc)}
+                result = {"success": False, "error": safe_provider_error(
+                    exc, os.getenv("LLM_PROVIDER", "gemini"))}
         else:
             try:
                 answer = ask(conn, options.question)
@@ -89,7 +90,8 @@ def main() -> None:
                           "claims": answer.claims, "structured": answer.structured,
                           "tool_calls": answer.tool_calls}
             except Exception as exc:  # noqa: BLE001 - CLI should report provider failures cleanly
-                result = {"error": str(exc)}
+                result = {"error": safe_provider_error(
+                    exc, os.getenv("LLM_PROVIDER", "gemini"))}
         # JSON escapes keep CLI output valid on Windows consoles with legacy code pages.
         print(json.dumps(result, ensure_ascii=True, indent=2))
     finally:
