@@ -59,6 +59,7 @@ def inspect_document(conn: sqlite3.Connection, file: str) -> dict[str, Any]:
         for row in _rows(conn, "SELECT row_num,cells_json FROM sheet_rows "
                          "WHERE document_id=? AND sheet=? ORDER BY row_num LIMIT 12", (doc["id"], s["sheet"])):
             s["preview"].append({"row": row["row_num"],
+                                 "citation": f"{doc['path']} | {s['sheet']} | row {row['row_num']}",
                                  "cells": {col: cell["value"] for col,cell in json.loads(row["cells_json"]).items()}})
     return {"document": doc, "sheets": sheets}
 
@@ -301,11 +302,11 @@ TOOLS = {
 TOOL_SCHEMAS = [
     {"name": "list_documents", "description": "List files indexed, file types and ingestion errors.",
      "parameters": {"type": "object", "properties": {}}},
-    {"name": "inspect_document", "description": "Inspect an exact PDF, Word document or Excel workbook and preview its contents. Call before ambiguous spreadsheet queries.",
+    {"name": "inspect_document", "description": "Inspect a document. Excel previews include exact row citations such as File.xlsx | Sheet | row 2; copy one exactly for get_evidence or a claim. Call before ambiguous spreadsheet queries.",
      "parameters": {"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]}},
     {"name": "search_documents", "description": "Search PDF text, Word paragraphs and tables, and spreadsheet rows for clauses, scope, deliverables and terminology. Returns source references.",
      "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "file": {"type": "string"}}, "required": ["query"]}},
-    {"name": "query_spreadsheet", "description": "Run READ-ONLY numeric BOQ queries. Set operator='all' with no value to list/sum all rows; provide value for gt/gte/lt/lte/eq comparisons. Return exact source cells and warnings. Paginate with offset.",
+    {"name": "query_spreadsheet", "description": "Run READ-ONLY financial BOQ amount queries, not general milestone or schedule lookup. Set operator='all' with no value to list/sum all BOQ rows; provide value for gt/gte/lt/lte/eq comparisons. Return exact source cells and warnings. Paginate with offset.",
      "parameters": {"type": "object", "properties": {
          "column_hint": {"type": "string"}, "operator": {"type": "string", "enum": ["gt","gte","lt","lte","eq","all"]},
          "value": {"type": "number"}, "file": {"type": "string"}, "sheet": {"type": "string"},
@@ -313,6 +314,6 @@ TOOL_SCHEMAS = [
          "limit": {"type": "integer"}, "offset": {"type": "integer"}}}},
     {"name": "extract_dates", "description": "Extract candidate dates from PDF, Word and Excel, with context and citations; paginate for large results.",
      "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}}}},
-    {"name": "get_evidence", "description": "Verify a PDF chunk/table cell, Word paragraph/table row, or Excel cell citation and read its underlying content.",
+    {"name": "get_evidence", "description": "Verify a citation copied EXACTLY from another tool result. Excel row syntax: File.xlsx | Sheet | row 2; Excel cell syntax: File.xlsx | Sheet!C2. Ranges and 'cell C2' are unsupported.",
      "parameters": {"type": "object", "properties": {"citation": {"type": "string"}}, "required": ["citation"]}},
 ]

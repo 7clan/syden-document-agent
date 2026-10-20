@@ -114,6 +114,100 @@ def _evidence_text(evidence: dict[str, Any]) -> str:
     return ""
 
 
+def _spreadsheet_citation(citation: str) -> bool:
+    """Distinguish workbook rows from PDF BOQ rows, which also have cells."""
+    return bool(re.fullmatch(
+        r".+?\.(?:xlsx|xlsm|xls) \| .+?(?: \| row [1-9]\d*|![A-Z]{1,3}[1-9]\d*)",
+        citation, re.IGNORECASE))
+
+
+def _row_conflict(conn: sqlite3.Connection, citation: str,
+                  row: dict[str, Any], statement: str) -> str | None:
+    """Check explicit workbook facts against one cited row, never adjacent rows."""
+    values = [str(value) for value in row.values() if value is not None]
+    source = " ".join(values)
+    claim_ids = _identifiers(statement)
+    row_ids = _identifiers(source)
+    if claim_ids and not claim_ids <= row_ids:
+        return "Identifier belongs to a different spreadsheet row"
+    claim_dates, rest = _date_values(statement)
+    source_dates, source_rest = _date_values(source)
+    if not claim_dates <= source_dates:
+        return "Date is absent or differs from cited spreadsheet row"
+    if not numbers(_without_identifiers(rest)) <= numbers(_without_identifiers(source_rest)):
+        return "Quantity or amount is absent from cited spreadsheet row"
+    currency = re.compile(r"\b(?:SAR|AED|USD|EUR|GBP)\b", re.IGNORECASE)
+    if {item.upper() for item in currency.findall(statement)} - {
+            item.upper() for item in currency.findall(source)}:
+        return "Currency is absent from cited spreadsheet row"
+
+    # These are explicit cell states, not an inference from a prose sentence.
+    def state(text: str, label: str) -> bool | None:
+        if re.search(rf"\b(?:not|un|non)[ -]?{label}\b", text, re.IGNORECASE):
+            return False
+        if re.search(rf"\b{label}\b", text, re.IGNORECASE):
+            return True
+        return None
+
+    for label in ("approved", "contractual", "accepted", "rejected"):
+        asserted = state(statement, label)
+        cell_states = {state(value, label) for value in values} - {None}
+        if asserted is not None and cell_states and asserted not in cell_states:
+            return f"{label.capitalize()} status conflicts with cited spreadsheet row"
+
+    def decision(text: str) -> str | None:
+        if re.search(r"\bnot[ -]+approved\b", text, re.IGNORECASE):
+            return "not_approved"
+        for word in ("approved", "rejected", "pending", "proposed", "accepted"):
+            if re.search(rf"\b{word}\b", text, re.IGNORECASE):
+                return word
+        return None
+
+    asserted_decision = decision(statement)
+    source_decisions = {decision(value) for value in values} - {None}
+    if (asserted_decision is not None and source_decisions
+            and asserted_decision not in source_decisions):
+        return "Approval or decision differs from cited spreadsheet row"
+
+    # A distinctive cell value from another row cannot be attributed to this
+    # one. This catches swapped descriptions even when their dates coincide.
+    match = re.fullmatch(r"(.+?) \| (.+?)(?: \| row (\d+)|![A-Z]{1,3}(\d+))", citation)
+    if match:
+        path, sheet, row_number = match.group(1), match.group(2), int(match.group(3) or match.group(4))
+        preceding = conn.execute(
+            "SELECT s.cells_json FROM sheet_rows s JOIN documents d ON d.id=s.document_id "
+            "WHERE d.path=? AND s.sheet=? AND s.row_num<? ORDER BY s.row_num DESC LIMIT 8",
+            (path, sheet, row_number))
+        for header_row in preceding:
+            headers = json.loads(header_row[0])
+            approval_columns = [col for col, cell in headers.items() if re.search(
+                r"\b(?:approval|decision|status)\b", str(cell.get("value", "")), re.IGNORECASE)]
+            if approval_columns:
+                approval_values = [str(row[col]) for col in approval_columns if col in row]
+                if asserted_decision is not None and approval_values:
+                    approvals = {decision(value) or (
+                        "not_approved" if re.search(r"\b(?:not|no)\b", value, re.IGNORECASE)
+                        else "other") for value in approval_values}
+                    if asserted_decision not in approvals:
+                        return "Approval or decision differs from cited spreadsheet cell"
+                break
+        siblings = conn.execute(
+            "SELECT s.cells_json FROM sheet_rows s JOIN documents d ON d.id=s.document_id "
+            "WHERE d.path=? AND s.sheet=? AND s.row_num!=?", (path, sheet, row_number))
+        folded_claim = normalize(statement)
+        folded_source = normalize(source)
+        for sibling in siblings:
+            for cell in json.loads(sibling[0]).values():
+                value = cell.get("value")
+                if not isinstance(value, str):
+                    continue
+                phrase = normalize(value)
+                if (len(phrase) >= 12 and len(phrase.split()) >= 2
+                        and phrase in folded_claim and phrase not in folded_source):
+                    return "Description or classification belongs to a different spreadsheet row"
+    return None
+
+
 def _status(text: str) -> int | None:
     words = set(re.findall(r"[a-z]+", text.casefold()))
     found = [index for index, group in enumerate(STATUS_GROUPS) if words & group]
@@ -386,9 +480,24 @@ def _resolve_supports(conn: sqlite3.Connection, claim: str, supports: list[Any],
                     question, paths, citation.split(" | ")[0], part)):
             return citations, excerpts, full_sources, (
                 "Source was not retrieved or is outside the question part")
-        source = _evidence_text(get_evidence(conn, citation))
+        evidence = get_evidence(conn, citation)
+        source = _evidence_text(evidence)
         if not source:
             return citations, excerpts, full_sources, "Cited source is missing from the index"
+        if _spreadsheet_citation(citation):
+            row = evidence.get("row")
+            if not isinstance(row, dict):
+                return citations, excerpts, full_sources, "Cited spreadsheet row is missing"
+            # The model may combine separate cells in natural prose. Authenticate
+            # its explicit facts, then construct the audit excerpt from indexed cells.
+            for statement in (claim, quote) if quote else (claim,):
+                if conflict := _row_conflict(conn, citation, row, statement):
+                    return citations, excerpts, full_sources, conflict
+            citations.append(citation)
+            full_sources.append(source)
+            excerpts.append({"citation": citation, "quote": source,
+                             "start": 0, "end": len(source), "structured": True})
+            continue
         span = _source_span(source, quote) if quote else _select_local_span(source, claim)
         if span is None:
             return citations, excerpts, full_sources, (
@@ -476,9 +585,14 @@ def validate_claims(conn: sqlite3.Connection, raw: str,
             citations, excerpts, full_sources, reason = _resolve_supports(
                 conn, claim, supports, allowed, question, paths, part)
             if not reason:
-                reason = _check_comparable_facts(
-                    conn, claim, excerpts, full_sources, allowed)
-        exact = not reason and any(normalize(claim) in normalize(item["quote"])
+                # Cell facts have already been checked against their own rows.
+                # Text passages retain strict span and comparable-fact checks.
+                prose = [item for item in excerpts if not item.get("structured")]
+                if prose and len(prose) == len(excerpts):
+                    reason = _check_comparable_facts(
+                        conn, claim, prose, full_sources, allowed)
+        exact = not reason and any(not item.get("structured") and
+                                   normalize(claim) in normalize(item["quote"])
                                    for item in excerpts)
         status = ("unverified" if reason else
                   "deterministically_verified" if exact else "evidence_linked")

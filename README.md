@@ -112,6 +112,16 @@ numbers, dates, currencies, identifiers, and directly comparable conflicting
 facts. These checks establish provenance and detect some errors; they cannot
 prove arbitrary natural-language interpretations.
 
+For Excel rows, Python reads the original structured cells. The model may
+describe several columns in a different word order; its prose is checked
+against the cited row's identifiers, dates, numbers, approval and
+classification values instead of being treated as a verbatim quote. The audit
+excerpt comes from indexed cells, and these interpretations remain
+**evidence-linked**. PDF and Word quotes still require an authentic local text
+span. Spreadsheet inspection previews include copyable row citations.
+`query_spreadsheet` searches financial BOQ amounts; zero matches there do not
+mean a milestone schedule is empty.
+
 Each claim identifies the numbered part of the question it answers. A filename
 constrains that part, while another part can use evidence from another file.
 For a singular ambiguous request such as “the contract” when multiple contract
@@ -143,6 +153,10 @@ retry clears an earlier tool error. Unreadable files remain visible as coverage
 limits. Repeated tool calls are cached and bounded. No second model call is
 made solely to verify a draft answer; a provider emitting invalid JSON may
 receive one format-only generation retry.
+Tool responses sent to models use compact previews while verification retains
+the full local index. Groq and other compatible providers retry one HTTP 429
+only when its `retry-after` delay fits the bounded request budget; otherwise
+the app displays a provider-specific wait message without the raw API error.
 
 OpenAI Chat Completions uses a strict JSON schema for the response. If that
 format is rejected by the chosen OpenAI model, the generation request is
@@ -259,6 +273,11 @@ should be checked separately.
 After the scoped provenance correction on 2026-10-20, the local suite passed
 **184 tests with 1 skipped**, and Ruff passed. The tested live scenarios and
 the remaining provider limits are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
+After the structured Excel and provider-context fix on 2026-10-20, the local
+suite passed **202 tests with 1 skipped**, and Ruff passed. A live Gemini
+five-milestone schedule query returned five correctly cited, evidence-linked
+claims; the latest Groq synthetic smoke run did not meet its strict success
+criterion because one unsupported extra claim was omitted.
 
 ### Observed provider checks (2026-10-19)
 

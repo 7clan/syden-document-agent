@@ -162,3 +162,32 @@ request and token totals are not instrumented, so latency is per CLI invocation
 and may include several normal tool-calling rounds. No second semantic
 verification request is used. The optional JSON retry is generation-only and
 is bounded to one additional request.
+
+## Structured schedule evidence and Groq context check (2026-10-20)
+
+The first live Gemini rerun of the five-milestone question stopped after six
+tool rounds. `inspect_document` showed the rows but did not provide copyable
+row citations; the model tried two unsupported citation formats and two
+financial `query_spreadsheet` calls, both with zero matches. After adding exact
+row citations to inspection previews and clarifying each tool's purpose, a
+second live Gemini run returned all five activities, dates, classifications,
+and approval statuses with the correct `05_Project_Schedule.xlsx | Milestones |
+row 2` through `row 6` references. All five claims were evidence-linked and
+none was rejected. The run took about 9 seconds and used `list_documents`,
+`inspect_document`, and five `get_evidence` calls. It did not call
+`query_spreadsheet` on the schedule.
+
+The new offline structured-row cases cover combined-column paraphrases,
+swapped dates, approval and classification conflicts, a description copied
+from a different row, repeated headers, reordered columns, `.xls` citations,
+and strict Word quotes. Provider tests check bounded one-time 429 retry,
+`retry-after` parsing, safe messages, duplicate search-result suppression,
+and compact model previews. These tests use mocked rate-limit responses;
+the retry path has not been observed on a live 429.
+
+One real Groq synthetic smoke attempt used `search_documents` and
+`get_evidence` and returned the correct ORCHID-7429 fact, but the smoke
+command reported `success: false` because the model added an unsupported
+tool-action claim. It was omitted from the final answer, so this is not a
+passing provider smoke test. No live 429 occurred on this attempt. Model
+availability and rate limits remain provider and account dependent.

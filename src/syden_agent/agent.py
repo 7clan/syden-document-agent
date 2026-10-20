@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -36,6 +39,9 @@ when some files failed parsing or extraction. For scope and dates, verify contex
 Cite evidence exactly using the supplied source citations (PDF filename/page/chunk, Word
 filename/paragraph/table row, or Excel filename/sheet/cell). Quote or paraphrase only supported facts. If evidence is insufficient,
 say 'Not found in the indexed documents', with an explanation when appropriate.
+Excel inspect previews carry exact row citations; copy them literally. Do not invent a
+cell range or use 'cell A2' syntax. query_spreadsheet searches financial BOQ amounts,
+not project schedules; zero BOQ matches does not mean milestone rows are absent.
 Copy identifiers exactly as stored, including ASCII hyphens; do not substitute typographic punctuation.
 For a final prose answer, return ONLY a JSON object with keys answer (string),
 insufficient (boolean), and claims (array). Each claim has text (one factual
@@ -123,6 +129,109 @@ def _cached_tool(conn: sqlite3.Connection, name: str, args: dict[str, Any],
     if "error" not in result:
         cache[key] = result
     return result, False
+
+
+def _model_tool_result(name: str, result: dict[str, Any], repeated: bool,
+                       seen: set[str]) -> dict[str, Any]:
+    """Send bounded previews to the model; retain full indexed evidence locally."""
+    if repeated:
+        return {"reused": True, "message": "Result already returned; use earlier evidence.",
+                "citations": list(dict.fromkeys(_collect_citations(result)))[:12]}
+    if "error" in result:
+        return result
+    output = dict(result)
+    if name == "search_documents":
+        hits = []
+        for hit in result.get("results", []):
+            citation = hit.get("citation")
+            if citation in seen:
+                continue
+            if citation:
+                seen.add(citation)
+            hits.append({**hit, "preview": str(hit.get("preview", ""))[:360]})
+        output["results"] = hits
+        if len(hits) < len(result.get("results", [])):
+            output["already_seen_results"] = len(result["results"]) - len(hits)
+    elif name == "inspect_document":
+        for key in ("passages_preview", "blocks_preview"):
+            if key in output:
+                output[key] = [{**item, "preview": str(item.get("preview", ""))[:360]}
+                               for item in output[key]]
+        if "sheets" in output:
+            output["sheets"] = [{**sheet, "preview": [
+                {"row": row["row"], "citation": row.get("citation"),
+                 "cells": {col: str(value)[:180] for col, value
+                                                in row["cells"].items()}}
+                for row in sheet["preview"][:6]]} for sheet in output["sheets"]]
+    elif name == "get_evidence" and "text" in output:
+        source = str(output["text"])
+        output["text"] = source[:1800]
+        if len(source) > 1800:
+            output["preview_only"] = True
+    elif name in {"query_spreadsheet", "extract_dates"}:
+        key = "matches" if name == "query_spreadsheet" else "dates"
+        if isinstance(output.get(key), list) and len(output[key]) > 12:
+            output[key] = output[key][:12]
+            output["preview_only"] = True
+        if name == "query_spreadsheet" and output.get("total_matches") == 0:
+            output["note"] = ("No financial BOQ matches. For milestones or other "
+                              "nonfinancial rows, use inspect_document/search_documents "
+                              "and cite their exact row references.")
+    return output
+
+
+class ProviderRateLimitError(RuntimeError):
+    """A safe user-facing rate-limit message without provider response bodies."""
+
+    def __init__(self, provider: str, seconds: float | None):
+        label = {"groq": "Groq", "openai": "OpenAI", "ollama_cloud": "Ollama Cloud",
+                 "compatible": "Model provider"}.get(provider, "Model provider")
+        suffix = (f" Please retry in approximately {math.ceil(seconds)} seconds."
+                  if seconds is not None and math.isfinite(seconds) else
+                  " Please retry shortly.")
+        super().__init__(f"{label} rate limit reached.{suffix}")
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or getattr(exc, "headers", None) or {}
+    for name, divisor in (("retry-after-ms", 1000), ("retry-after", 1)):
+        value = headers.get(name)
+        if value is None:
+            value = next((item for key, item in headers.items()
+                          if str(key).lower() == name), None)
+        if value is None:
+            continue
+        try:
+            return max(0.0, float(value) / divisor)
+        except (TypeError, ValueError):
+            if name == "retry-after":
+                try:
+                    parsed = parsedate_to_datetime(value)
+                    return max(0.0, (parsed - datetime.now(UTC)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+    # Some compatible endpoints omit the header but include a short delay.
+    match = re.search(r"(?:try again|retry) in (\d+(?:\.\d+)?)\s*(?:s|seconds?)\b",
+                      str(exc), re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
+def _rate_limited_create(create: Callable[..., Any], request: dict[str, Any],
+                         provider: str, deadline: float) -> Any:
+    """Retry one 429 only when its provider-specified wait fits our time budget."""
+    for attempt in range(2):
+        try:
+            return create(**request)
+        except Exception as exc:
+            if getattr(exc, "status_code", None) != 429:
+                raise
+            wait = _retry_after_seconds(exc)
+            if (attempt or wait is None or wait > 8
+                    or time.monotonic() + wait >= deadline):
+                raise ProviderRateLimitError(provider, wait) from None
+            time.sleep(wait)
+    raise AssertionError("rate-limit retry loop must return or raise")
 
 
 def _verified_sources(conn: sqlite3.Connection, observed: list[str]) -> list[str]:
@@ -858,6 +967,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     citations: list[str] = []
     numeric_args: dict[str, Any] | None = None
     cache: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
     stalled = 0
     deadline = time.monotonic() + 75
     for _ in range(max_rounds):
@@ -894,15 +1004,17 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
             all_repeated &= repeated
             if call.name == "query_spreadsheet" and "error" not in result:
                 numeric_args = args
-            citations.extend(_collect_citations(result))
+            model_result = _model_tool_result(call.name, result, repeated, seen)
+            citations.extend(_collect_citations(model_result))
+            seen.update(_collect_citations(model_result))
             tool_calls.append({"name": call.name, "args": args,
                                "ok": "error" not in result,
                                "reused": repeated,
                                "truncated": bool(result.get("truncated") or result.get("has_more")),
                                "incomplete": bool(result.get("incomplete")),
-                               "result_preview": json.dumps(result, default=str)[:1000]})
+                               "result_preview": json.dumps(model_result, default=str)[:500]})
             parts.append(types.Part(function_response=types.FunctionResponse(
-                id=call.id, name=call.name, response={"result": result})))
+                id=call.id, name=call.name, response={"result": model_result})))
         contents.append(types.Content(role="user", parts=parts))
         stalled = stalled + 1 if all_repeated else 0
         if stalled >= 2:
@@ -962,6 +1074,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     format_retry = False
     native_schema = provider == "openai"
     cache: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
     stalled = 0
     deadline = time.monotonic() + 75
     for _ in range(max_rounds):
@@ -978,7 +1091,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             request["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
         try:
-            response = client.chat.completions.create(**request)
+            response = _rate_limited_create(client.chat.completions.create,
+                                            request, provider, deadline)
         except Exception as exc:  # Retry only unsupported schema errors.
             if not native_schema or not re.search(
                     r"response.format|json.schema|structured.output", str(exc), re.IGNORECASE):
@@ -987,7 +1101,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             request.pop("response_format")
             trace.append({"name": "structured_output_fallback", "ok": True,
                           "reason": "Native JSON schema unavailable; instructed JSON remains required"})
-            response = client.chat.completions.create(**request)
+            response = _rate_limited_create(client.chat.completions.create,
+                                            request, provider, deadline)
         msg = response.choices[0].message
         if not msg.tool_calls:
             text = (msg.content or "").strip()
@@ -1029,15 +1144,17 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             all_repeated &= repeated
             if call.function.name == "query_spreadsheet" and "error" not in result:
                 numeric_args = args
-            citations.extend(_collect_citations(result))
+            model_result = _model_tool_result(call.function.name, result, repeated, seen)
+            citations.extend(_collect_citations(model_result))
+            seen.update(_collect_citations(model_result))
             trace.append({"name": call.function.name,"args": args,
                           "ok": "error" not in result,
                           "reused": repeated,
                           "truncated": bool(result.get("truncated") or result.get("has_more")),
                           "incomplete": bool(result.get("incomplete")),
-                          "result_preview": json.dumps(result, default=str)[:1000]})
+                          "result_preview": json.dumps(model_result, default=str)[:500]})
             messages.append({"role": "tool", "tool_call_id": call.id,
-                             "content": json.dumps(result, default=str)})
+                             "content": json.dumps(model_result, default=str)})
         if _has_numeric_result(trace):
             force_numeric = False
         stalled = stalled + 1 if all_repeated else 0
