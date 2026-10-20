@@ -83,4 +83,16 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     next(button for button in page.button if button.label == "Open source").click().run()
     assert not page.exception
     assert any("Cited cell value: 1500000" in item.value for item in page.caption)
+    page.session_state["last_answer"] = Answer(
+        "The model reported insufficient evidence.", [],
+        [{"name": "search_documents", "ok": True}],
+        structured={"candidate_sources": ["Contract.pdf | page 1 | chunk 0"]},
+        verification_status="unverified",
+    )
+    page.run()
+    assert not page.exception
+    assert any("Retrieved locations for manual review" in item.value
+               for item in page.caption)
+    next(button for button in page.button if button.label == "Open source").click().run()
+    assert any("Submit design drawings" in item.value for item in page.text)
     conn.close()

@@ -114,7 +114,9 @@ def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkey
     assert answer.sources == ["smoke.pdf | page 1 | chunk 0"]
     assert answer.verification_status == "evidence_linked"
     assert answer.tool_calls[0]["name"] == "search_documents"
-    assert messages_seen[1][-1]["role"] == "tool"
+    assert messages_seen[1][-2]["role"] == "tool"
+    assert messages_seen[1][-1]["role"] == "user"
+    assert "Synthetic code ORCHID-7429" in messages_seen[1][-1]["content"]
     assert len(messages_seen) == 2  # No verification-only request.
     assert requests_seen[0]["response_format"]["type"] == "json_schema"
 

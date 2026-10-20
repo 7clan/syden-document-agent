@@ -276,3 +276,37 @@ One additional synthetic smoke test used the discovered direct Ollama ID
 `gpt-oss:20b`: it called `search_documents` and returned the fictional
 ARBOR-17 code with an indexed PDF citation in about 8 seconds. Other listed
 Ollama models remain untested for actual tool-call reliability.
+
+## Indexed evidence handoff and provider diagnostics (2026-10-20)
+
+An observed Ollama GPT-OSS 120B answer falsely said an approved change order
+contained no revised sum, although the indexed PDF stated SAR 7,070,000. The
+previous model-facing search preview showed only the first 360 characters and
+suppressed a citation when a later search found it again. Search now shows a
+query-relevant excerpt on every new search, while an exact duplicate call remains
+cached. The next model request also receives bounded original indexed text for
+search and inspection citations without requiring a model-selected `get_evidence`
+call. If a model reports insufficiency after retrieval, one answer retry receives
+indexed evidence. A persistent absence response remains unverified, with candidate
+source locations available for manual inspection. This is an evidence delivery
+fix, not proof of semantic correctness.
+
+The offline regression uses identical synthetic main-contract and change-order
+records. A simulated GPT-OSS sequence searches twice, omits `get_evidence`,
+incorrectly reports no sum, then answers correctly after the bounded retry. A
+simulated Gemma sequence calls `get_evidence`. Both see the indexed revised sum.
+A persistent false absence stays unverified. Diagnostics tests check HTTP status,
+sanitized error code, and request phase without provider body text.
+
+Live comparison used the same two generated PDFs for each model:
+
+| Provider/model | Seconds | Actual document tools | Revised sum visible in model context | Outcome |
+| --- | ---: | --- | --- | --- |
+| Ollama `gemma4:31b` | 7.0 | `search_documents` | Yes; 997 handoff characters, 2 citations | SAR 7,070,000, cited, evidence-linked |
+| Ollama `gpt-oss:120b` | 6.4 | `search_documents` | Yes; 905 handoff characters, 1 citation | SAR 7,070,000, cited, evidence-linked |
+| Groq `openai/gpt-oss-120b` | 6.8 | `search_documents`, `get_evidence` | Yes; 905 handoff characters, 1 citation | SAR 7,070,000, cited, evidence-linked |
+
+The earlier Ollama false absence and Groq HTTP 400 were not reproduced in these
+three live calls. This small sample cannot establish a false-refusal rate or
+guarantee unseen document performance. Groq HTTP 400 code/phase display is
+covered by mocked errors; no actual HTTP 400 occurred in this retest.

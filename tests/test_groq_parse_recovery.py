@@ -138,7 +138,8 @@ def test_other_http_400_and_429_are_not_output_parse_retries(monkeypatch):
                     model_override="openai/gpt-oss-20b")
     assert len(requests) == 1
     assert safe_provider_error(captured.value, "groq") == (
-        "Groq rejected the request (HTTP 400). Check the model ID and tool support.")
+        "Groq rejected the tool request (HTTP 400, code: model_not_found). "
+        "Check the selected model or retry with a shorter question.")
     assert "rate limit" in safe_provider_error(FakeAPIError(429, "rate_limit"),
                                                "groq").lower()
     assert "raw secret" not in safe_provider_error(

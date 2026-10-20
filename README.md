@@ -132,7 +132,17 @@ is complete. Candidate date extraction likewise remains a tool result; nearby
 text does not automatically prove a contractual obligation.
 
 The model still calls read-only document tools before answering. Repeated calls
-are cached and bounded. If it uses the entire tool-round budget, one final
+are cached and bounded. Every new search returns its query-relevant excerpt,
+even when an earlier search found the same citation. After search or inspection,
+the agent also hands the next model request bounded original text resolved from
+the index, up to 12,000 characters across the question. This makes source text
+available even when a model never calls `get_evidence`; it does not establish
+complete coverage of long documents. The audit records citation IDs and the size
+of this handoff, not its text. A model that reports insufficient evidence after
+retrieving sources
+gets at most one answer retry with indexed evidence; if it still reports absence,
+the answer remains unverified and the retrieved locations are shown for review.
+If it uses the entire tool-round budget, one final
 generation request with tools disabled asks it to answer from the evidence already
 retrieved, or state that evidence is insufficient. A provider that returns no
 answer shows no source references, since search hits alone do not support a claim.
@@ -161,6 +171,9 @@ the retry requests a final answer with tools disabled. GPT-OSS 20B/120B and
 Qwen 3.8 27B use Groq's strict JSON schema on these tool-free final requests.
 An unrecoverable parsing failure produces a short error without the provider's
 `failed_generation` text. No failed output is treated as source evidence.
+Provider failures show a safe diagnostic containing only HTTP status, a sanitized
+error code, and the request phase (`tool` or `final`). Provider response bodies,
+keys, and model reasoning are never copied into that diagnostic.
 Ollama Cloud may not enforce structured output, so its JSON formatting still
 needs live checking with the selected model.
 
@@ -298,6 +311,10 @@ and BOQ questions were checked separately without claiming live Groq success.
 The discovered Ollama direct API ID `gpt-oss:20b` passed a synthetic
 `search_documents` tool-call smoke check; other listed Ollama models have not
 been checked for live tool-call reliability.
+The later identical-document Gemma 4 31B, Ollama GPT-OSS 120B, and Groq GPT-OSS
+120B checks are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md). They are a
+small synthetic sample; the reported Ollama false absence and Groq HTTP 400 did
+not recur on those checks.
 
 ### Observed provider checks (2026-10-19)
 

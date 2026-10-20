@@ -81,11 +81,11 @@ def test_search_context_shrinks_and_duplicate_evidence_is_reused():
     compact = _model_tool_result("search_documents", result, False, seen)
     assert len(json.dumps(compact)) < len(json.dumps(result)) / 4
     assert compact["results"][0]["citation"] == citation
-    assert compact["results"][0]["preview"] == passage[:360]
+    assert compact["results"][0]["preview"] == passage[:650]
     assert result["results"][0]["preview"] == passage  # full local evidence remains
     again = _model_tool_result("search_documents", result, False, seen)
-    assert again["results"] == []
-    assert again["already_seen_results"] == 1
+    assert again["results"][0]["citation"] == citation
+    assert again["results"][0]["preview"] == passage[:650]
     reused = _model_tool_result("search_documents", result, True, seen)
     assert reused["reused"] is True
     assert "preview" not in json.dumps(reused)

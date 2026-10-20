@@ -244,5 +244,6 @@ def test_streamlit_never_shows_provider_failed_generation(monkeypatch, tmp_path)
     page.text_area[0].set_value("What does the document say?").run()
     next(button for button in page.button if button.label == "Ask agent").click().run()
     assert not page.exception
-    assert any("Groq rejected the request" in error.value for error in page.error)
+    assert any("Groq rejected the unknown request" in error.value for error in page.error)
+    assert any("code: output_parse_failed" in error.value for error in page.error)
     assert not any("PRIVATE PLANNING TEXT" in error.value for error in page.error)

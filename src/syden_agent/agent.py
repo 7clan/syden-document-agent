@@ -18,7 +18,15 @@ from dotenv import load_dotenv
 
 from .claim_verifier import _explicit_files, parse_answer, question_parts, validate_claims
 from .semantic_verifier import verify_judgement
-from .tools import TOOL_SCHEMAS, TOOLS, _num, extract_dates, get_evidence, query_spreadsheet
+from .tools import (
+    TOOL_SCHEMAS,
+    TOOLS,
+    _num,
+    _search_excerpt,
+    extract_dates,
+    get_evidence,
+    query_spreadsheet,
+)
 
 load_dotenv()
 
@@ -140,14 +148,17 @@ def _model_tool_result(name: str, result: dict[str, Any], repeated: bool,
         hits = []
         for hit in result.get("results", []):
             citation = hit.get("citation")
-            if citation in seen:
-                continue
             if citation:
                 seen.add(citation)
-            hits.append({**hit, "preview": str(hit.get("preview", ""))[:360]})
+            preview = hit.get("preview", "")
+            if isinstance(preview, dict):
+                visible = {col: str(value)[:180] for col, value in preview.items()}
+            else:
+                visible = str(preview)[:650]
+            hits.append({**hit, "preview": visible,
+                         "preview_only": bool(hit.get("preview_only") or
+                                              len(str(preview)) > 650)})
         output["results"] = hits
-        if len(hits) < len(result.get("results", [])):
-            output["already_seen_results"] = len(result["results"]) - len(hits)
     elif name == "inspect_document":
         for key in ("passages_preview", "blocks_preview"):
             if key in output:
@@ -180,6 +191,8 @@ class ProviderRateLimitError(RuntimeError):
     """A safe user-facing rate-limit message without provider response bodies."""
 
     def __init__(self, provider: str, seconds: float | None):
+        self.status_code = 429
+        self.safe_code = "rate_limit"
         label = {"groq": "Groq", "openai": "OpenAI", "ollama_cloud": "Ollama Cloud",
                  "compatible": "Model provider"}.get(provider, "Model provider")
         suffix = (f" Please retry in approximately {math.ceil(seconds)} seconds."
@@ -192,9 +205,13 @@ class ProviderOutputParseError(RuntimeError):
     """Groq could not parse a tool call or final response; hide its generated text."""
 
     def __init__(self, phase: str):
+        self.status_code = 400
+        self.safe_code = "output_parse_failed"
+        self.request_phase = phase
         detail = ("a tool-capable request" if phase == "tool" else "the final answer")
-        super().__init__(f"Groq could not parse {detail}. Retry with a shorter question "
-                         "or choose another tool-capable model.")
+        super().__init__(f"Groq could not parse {detail} "
+                         f"(HTTP 400, code: output_parse_failed, phase: {phase}). "
+                         "Retry with a shorter question or choose another tool-capable model.")
 
 
 def _provider_error_code(exc: Exception) -> str:
@@ -204,6 +221,18 @@ def _provider_error_code(exc: Exception) -> str:
         if isinstance(error, dict):
             return str(error.get("code") or "")
     return ""
+
+
+def provider_error_diagnostic(exc: Exception) -> dict[str, Any]:
+    """Only fixed-size provider metadata, never API bodies or generated text."""
+    status = getattr(exc, "status_code", None)
+    raw_code = getattr(exc, "safe_code", None) or _provider_error_code(exc)
+    code = (raw_code if isinstance(raw_code, str)
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw_code) else "provider_error")
+    phase = getattr(exc, "request_phase", None) or getattr(exc, "_syden_phase", None)
+    return {"http_status": status if isinstance(status, int) and 100 <= status <= 599 else None,
+            "code": code,
+            "phase": phase if phase in {"tool", "final"} else "unknown"}
 
 
 def _output_parse_failed(exc: Exception) -> bool:
@@ -237,7 +266,10 @@ def safe_provider_error(exc: Exception, provider: str) -> str:
     if status == 429:
         return f"{label} rate limit reached. Please retry shortly."
     if status == 400:
-        return f"{label} rejected the request (HTTP 400). Check the model ID and tool support."
+        diagnostic = provider_error_diagnostic(exc)
+        return (f"{label} rejected the {diagnostic['phase']} request "
+                f"(HTTP 400, code: {diagnostic['code']}). "
+                "Check the selected model or retry with a shorter question.")
     if isinstance(status, int) and status >= 500:
         return f"{label} is temporarily unavailable (HTTP {status}). Please retry shortly."
     return f"{label} request failed. Check the connection and selected model, then retry."
@@ -297,6 +329,35 @@ def _evidence_text(evidence: dict[str, Any]) -> str:
     if "document" in evidence:
         return evidence["document"]["path"]
     return ""
+
+
+def _evidence_handoff(conn: sqlite3.Connection, citations: list[str], query: str,
+                      sent: set[tuple[str, str]], budget: int = 9000) -> tuple[str, list[str]]:
+    """Send bounded, authentic indexed text with tool results before synthesis."""
+    sections: list[str] = []
+    included: list[str] = []
+    remaining = budget
+    terms = list(dict.fromkeys(re.findall(r"\w+", query.casefold())))
+    for citation in dict.fromkeys(citations):
+        if citation.endswith(" | document") or remaining < 180:
+            continue
+        evidence = get_evidence(conn, citation)
+        if "error" in evidence:
+            continue
+        original = _evidence_text(evidence).strip()
+        if not original:
+            continue
+        excerpt = _search_excerpt(original, terms, min(1800, remaining - 100))
+        key = (citation, excerpt)
+        if key in sent:
+            continue
+        sent.add(key)
+        sections.append(f"{citation}: {excerpt}")
+        included.append(citation)
+        remaining -= len(sections[-1])
+        if len(sections) >= 8:
+            break
+    return "\n".join(sections), included
 
 
 # Deterministic normalization is intentionally small and domain-specific. It does not
@@ -870,7 +931,9 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
                 missing = True
                 continue
             if citation not in [item["citation"] for item in local]:
-                local.append({"citation": citation, "quote": original[:1000]})
+                relevant = _search_excerpt(
+                    original, re.findall(r"\w+", question.casefold()), 1000)
+                local.append({"citation": citation, "quote": relevant})
                 sources.append(citation)
         status = "evidence_linked" if local and not missing else "unverified"
         reason = ("Retrieved source; model interpretation was not checked" if
@@ -886,8 +949,13 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
                         f"- {statement} *(source reference unavailable)*")
 
     result_text = "\n".join(rendered) if rendered else payload["answer"].strip()
+    candidates = ([cite for cite in retrieved_list if not cite.endswith(" | document")]
+                  if payload["insufficient"] else [])
     if payload["insufficient"]:
         result_text += "\n\nThe model reported insufficient evidence."
+        if candidates:
+            result_text += (" Indexed source locations were retrieved; the model's "
+                            "absence conclusion was not established. Inspect them below.")
     latest: dict[str, dict[str, Any]] = {}
     for call in trace:
         if call.get("name") in TOOLS:
@@ -905,6 +973,7 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
              "reason": "Citations checked; model claims were not fact-checked"}
     return Answer(result_text or "The provider returned no answer text.",
                   list(dict.fromkeys(sources)), [*trace, audit],
+                  structured={"candidate_sources": candidates} if candidates else None,
                   verification_status=status, claims=claims)
 
 
@@ -1117,7 +1186,10 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     numeric_args: dict[str, Any] | None = None
     cache: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
+    sent_evidence: set[tuple[str, str]] = set()
+    handoff_chars = 0
     stalled = 0
+    evidence_retry = False
     deadline = time.monotonic() + 75
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
@@ -1138,6 +1210,23 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(
                     text="Call extract_dates before answering the date question.")]))
                 continue
+            parsed = parse_answer(text)
+            if (parsed and parsed["insufficient"] and citations and not evidence_retry
+                    and not any(call.get("name") == "get_evidence" and call.get("ok")
+                                for call in tool_calls)
+                    and time.monotonic() < deadline):
+                evidence_retry = True
+                tool_calls.append({"name": "evidence_retry", "ok": True,
+                                   "reason": "Model reported insufficiency after source retrieval"})
+                context, _ = _evidence_handoff(conn, citations, question, set())
+                contents = [types.Content(role="user", parts=[types.Part.from_text(
+                    text=_scoped_question(question) + "\n\nOriginal indexed evidence:\n" +
+                         context + "\n\nReassess whether the requested fact is present. "
+                         "Return final JSON with exact citations. Do not claim absence "
+                         "from incomplete evidence.")])]
+                config = types.GenerateContentConfig(system_instruction=SYSTEM,
+                                                     temperature=0)
+                continue
             return _source_linked_answer(conn, text, citations, tool_calls, question,
                                          numeric_args, _has_dates_result(tool_calls))
         if not response.candidates or response.candidates[0].content is None:
@@ -1145,6 +1234,8 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                           [], tool_calls)
         contents.append(response.candidates[0].content)
         parts = []
+        handoff_sections: list[str] = []
+        handoff_citations: list[str] = []
         all_repeated = True
         for call in calls:
             args = dict(call.args or {})
@@ -1163,7 +1254,24 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                                "result_preview": json.dumps(model_result, default=str)[:500]})
             parts.append(types.Part(function_response=types.FunctionResponse(
                 id=call.id, name=call.name, response={"result": model_result})))
+            if call.name in {"search_documents", "inspect_document"}:
+                handoff, included = _evidence_handoff(
+                    conn, _collect_citations(model_result), question, sent_evidence,
+                    budget=max(0, 12000 - handoff_chars))
+                if included:
+                    handoff_sections.append(handoff)
+                    handoff_citations.extend(included)
+                    handoff_chars += len(handoff)
         contents.append(types.Content(role="user", parts=parts))
+        if handoff_sections:
+            visible = "\n".join(handoff_sections)
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                text="Original indexed source excerpts for the retrieved citations:\n" +
+                     visible)]))
+            tool_calls.append({"name": "evidence_handoff", "ok": True,
+                               "source_count": len(handoff_citations),
+                               "citations": handoff_citations,
+                               "visible_chars": len(visible)})
         stalled = stalled + 1 if all_repeated else 0
         if stalled >= 2:
             return Answer("The provider repeated the same searches without new evidence. "
@@ -1231,17 +1339,9 @@ def _answer_format(provider: str, model: str,
 def _compact_recovery_messages(conn: sqlite3.Connection, question: str,
                                citations: list[str]) -> list[dict[str, str]]:
     """Rebuild a retry from indexed evidence, without failed output or tool history."""
-    snippets: list[str] = []
-    for cite in _verified_sources(conn, citations):
-        if cite.endswith(" | document"):
-            continue
-        evidence = get_evidence(conn, cite)
-        excerpt = _evidence_text(evidence).strip()
-        if excerpt:
-            snippets.append(f"{cite}: {excerpt[:500]}")
-        if len(snippets) >= 16:
-            break
-    context = "\n".join(snippets) or "No passage-level evidence retrieved yet."
+    context, _ = _evidence_handoff(conn, _verified_sources(conn, citations),
+                                   question, set())
+    context = context or "No passage-level evidence retrieved yet."
     return [{"role": "system", "content": SYSTEM},
             {"role": "user", "content": _scoped_question(question)},
             {"role": "user", "content": "Previously retrieved indexed evidence:\n" + context}]
@@ -1265,10 +1365,13 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     numeric_args: dict[str, Any] | None = None
     force_numeric = False
     format_retry = False
+    evidence_retry = False
     native_schema = provider == "openai"
     parse_recovered = False
     cache: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
+    sent_evidence: set[tuple[str, str]] = set()
+    handoff_chars = 0
     stalled = 0
     deadline = time.monotonic() + 75
 
@@ -1278,6 +1381,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             return _rate_limited_create(client.chat.completions.create,
                                         request, provider, deadline)
         except Exception as exc:
+            try:
+                exc._syden_phase = phase
+            except (AttributeError, TypeError):
+                pass
             if provider != "groq" or not _output_parse_failed(exc):
                 raise
             if parse_recovered:
@@ -1315,6 +1422,10 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 return _rate_limited_create(client.chat.completions.create,
                                             recovery, provider, deadline)
             except Exception as retry_exc:
+                try:
+                    retry_exc._syden_phase = "tool" if retry_as_tool else "final"
+                except (AttributeError, TypeError):
+                    pass
                 if _output_parse_failed(retry_exc):
                     raise ProviderOutputParseError("tool" if retry_as_tool else "final") from None
                 raise
@@ -1356,9 +1467,23 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             if _needs_dates_query(question) and not _has_dates_result(trace):
                 messages.append({"role": "user", "content": "Call extract_dates before answering."})
                 continue
+            parsed = parse_answer(text)
+            if (parsed and parsed["insufficient"] and citations and not evidence_retry
+                    and not any(call.get("name") == "get_evidence" and call.get("ok")
+                                for call in trace)):
+                evidence_retry = True
+                format_retry = True
+                trace.append({"name": "evidence_retry", "ok": True,
+                              "reason": "Model reported insufficiency after source retrieval"})
+                messages = _compact_recovery_messages(conn, question, citations)
+                messages.append({"role": "user", "content":
+                                 "Reassess whether the requested fact is present in these "
+                                 "indexed excerpts. Return final JSON with exact citations. "
+                                 "Do not claim absence from incomplete evidence."})
+                continue
             if (citations and not _needs_numeric_query(question)
                     and not _needs_dates_query(question)
-                    and parse_answer(text) is None and not format_retry
+                    and parsed is None and not format_retry
                     and not parse_recovered):
                 format_retry = True
                 trace.append({"name": "format_retry", "ok": True,
@@ -1374,6 +1499,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                                          numeric_args, _has_dates_result(trace))
         messages.append(msg.model_dump(exclude_none=True))
         all_repeated = True
+        handoff_sections: list[str] = []
+        handoff_citations: list[str] = []
         for call in msg.tool_calls:
             try:
                 args = json.loads(call.function.arguments)
@@ -1398,6 +1525,23 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                           "result_preview": json.dumps(model_result, default=str)[:500]})
             messages.append({"role": "tool", "tool_call_id": call.id,
                              "content": json.dumps(model_result, default=str)})
+            if call.function.name in {"search_documents", "inspect_document"}:
+                handoff, included = _evidence_handoff(
+                    conn, _collect_citations(model_result), question, sent_evidence,
+                    budget=max(0, 12000 - handoff_chars))
+                if included:
+                    handoff_sections.append(handoff)
+                    handoff_citations.extend(included)
+                    handoff_chars += len(handoff)
+        if handoff_sections:
+            visible = "\n".join(handoff_sections)
+            messages.append({"role": "user", "content":
+                             "Original indexed source excerpts for the retrieved citations:\n" +
+                             visible})
+            trace.append({"name": "evidence_handoff", "ok": True,
+                          "source_count": len(handoff_citations),
+                          "citations": handoff_citations,
+                          "visible_chars": len(visible)})
         if _has_numeric_result(trace):
             force_numeric = False
         stalled = stalled + 1 if all_repeated else 0

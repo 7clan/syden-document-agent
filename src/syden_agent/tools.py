@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 from datetime import date, datetime
+from itertools import islice
 from typing import Any
 
 from .spreadsheet import _num, query_spreadsheet  # noqa: F401 - backward-compatible public import
@@ -16,6 +17,28 @@ def _rows(conn: sqlite3.Connection, query: str, params: tuple = ()) -> list[dict
 
 def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _search_excerpt(text: str, terms: list[str], width: int = 650) -> str:
+    """Choose an original-text window containing the most query terms."""
+    if len(text) <= width:
+        return text
+    lower = text.casefold()
+    positions = [match.start() for term in terms[:12]
+                 for match in islice(re.finditer(re.escape(term), lower), 12)]
+    if not positions:
+        return text[:width]
+    best_start, best_score = 0, -1
+    for position in positions:
+        start = max(0, min(position - width // 4, len(text) - width))
+        window = lower[start:start + width]
+        score = sum(term in window for term in terms)
+        if score > best_score:
+            best_start, best_score = start, score
+    # A value immediately after a matched phrase must not be clipped at the edge.
+    if 0 < len(text) - (best_start + width) < min(150, width // 4):
+        best_start = len(text) - width
+    return text[best_start:best_start + width]
 
 
 def _word_citation(row: sqlite3.Row) -> str:
@@ -102,7 +125,8 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20,
             score += len(terms) + 2
         if score:
             keep({"citation": f"{row['path']} | page {row['page']} | chunk {row['chunk']}",
-                  "preview": row["text"][:1300], "score": score})
+                  "preview": _search_excerpt(row["text"], terms), "score": score,
+                  "preview_only": len(row["text"]) > 650})
     for row in conn.execute("SELECT d.path,w.location,w.section,w.text FROM word_blocks w "
                             "JOIN documents d ON d.id=w.document_id WHERE d.status='ready' "
                             "AND (? = '' OR d.path = ?) "
@@ -110,7 +134,9 @@ def search_documents(conn: sqlite3.Connection, query: str, limit: int = 20,
         preview = f"{row['section']}: {row['text']}" if row["section"] else row["text"]
         score = sum(t in preview.lower() for t in terms)
         if score:
-            keep({"citation": _word_citation(row), "preview": preview[:1300], "score": score})
+            keep({"citation": _word_citation(row),
+                  "preview": _search_excerpt(preview, terms), "score": score,
+                  "preview_only": len(preview) > 650})
     for row in conn.execute("SELECT d.path,s.sheet,s.row_num,s.cells_json FROM sheet_rows s "
                             "JOIN documents d ON d.id=s.document_id WHERE d.status='ready' "
                             "AND (? = '' OR d.path = ?) "

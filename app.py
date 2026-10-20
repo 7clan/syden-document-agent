@@ -12,7 +12,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from syden_agent import model_catalog
-from syden_agent.agent import ask, safe_provider_error
+from syden_agent.agent import ask, provider_error_diagnostic, safe_provider_error
 from syden_agent.db import connect
 from syden_agent.file_manager import folder_files, remove_document
 from syden_agent.ingest import ingest_folder
@@ -298,7 +298,10 @@ if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
         try:
             answer = ask(conn, question, provider=provider, model=selected_model)
         except Exception as exc:  # noqa: BLE001 - show provider errors in the UI
+            st.session_state.pop("last_answer", None)
             st.error(safe_provider_error(exc, provider))
+            st.caption("Provider diagnostic (status, code, request phase only)")
+            st.json(provider_error_diagnostic(exc))
         else:
             st.session_state["last_answer"] = answer
             st.session_state.pop("csv_export", None)
@@ -311,9 +314,10 @@ if "last_answer" in st.session_state:
     st.caption("Answer status: " + status_labels.get(answer.verification_status, "Unverified"))
     st.markdown(answer.text)
     st.subheader("Source references")
+    candidate_sources = (answer.structured or {}).get("candidate_sources", [])
+    precise_sources = [source for source in answer.sources
+                       if not source.endswith(" | document")]
     if answer.sources:
-        precise_sources = [source for source in answer.sources
-                           if not source.endswith(" | document")]
         for index, source in enumerate(precise_sources):
             label, control = st.columns([5, 1])
             label.code(source)
@@ -321,39 +325,49 @@ if "last_answer" in st.session_state:
                 st.session_state["open_source"] = source
         if not precise_sources:
             st.info("Only document names were retrieved; no exact passage or row was cited.")
-        selected_source = st.session_state.get("open_source")
-        if selected_source in precise_sources:
-            detail = source_detail(conn, selected_source)
-            st.markdown("#### Indexed source location")
-            st.code(selected_source)
-            if "error" in detail:
-                st.warning(detail["error"])
-            else:
-                evidence = detail["evidence"]
-                if "row" in evidence:
-                    st.table([{"Cell": column, "Indexed value": value}
-                              for column, value in evidence["row"].items()])
-                    if "value" in evidence:
-                        st.caption("Cited cell value: " + str(evidence["value"].get("value")))
-                else:
-                    if evidence.get("section"):
-                        st.caption("Section: " + str(evidence["section"]))
-                    st.text(evidence.get("text", ""))
-                if detail["kind"] == "pdf":
-                    location = local_pdf_page(conn, selected_source)
-                    if location:
-                        pdf_path, page_number = location
-                        try:
-                            import pdfplumber
-
-                            with pdfplumber.open(pdf_path) as pdf:
-                                st.image(pdf.pages[page_number - 1].to_image(
-                                    resolution=100).original,
-                                    caption=f"Original PDF, page {page_number}")
-                        except (OSError, IndexError, ValueError) as exc:
-                            st.caption(f"Original page preview unavailable: {exc}")
     else:
-        st.info("No usable citations returned. Do not rely on unsupported claims.")
+        st.info("No claim-supporting citations returned. Do not rely on unsupported claims.")
+    if candidate_sources:
+        st.caption("Retrieved locations for manual review; these do not verify the model's claim.")
+        if len(candidate_sources) > 12:
+            st.caption(f"Showing 12 of {len(candidate_sources)} candidate locations; "
+                       "narrow the question to inspect the rest.")
+        for index, source in enumerate(candidate_sources[:12]):
+            label, control = st.columns([5, 1])
+            label.code(source)
+            if control.button("Open source", key=f"candidate_{index}"):
+                st.session_state["open_source"] = source
+    selected_source = st.session_state.get("open_source")
+    if selected_source in [*precise_sources, *candidate_sources]:
+        detail = source_detail(conn, selected_source)
+        st.markdown("#### Indexed source location")
+        st.code(selected_source)
+        if "error" in detail:
+            st.warning(detail["error"])
+        else:
+            evidence = detail["evidence"]
+            if "row" in evidence:
+                st.table([{"Cell": column, "Indexed value": value}
+                          for column, value in evidence["row"].items()])
+                if "value" in evidence:
+                    st.caption("Cited cell value: " + str(evidence["value"].get("value")))
+            else:
+                if evidence.get("section"):
+                    st.caption("Section: " + str(evidence["section"]))
+                st.text(evidence.get("text", ""))
+            if detail["kind"] == "pdf":
+                location = local_pdf_page(conn, selected_source)
+                if location:
+                    pdf_path, page_number = location
+                    try:
+                        import pdfplumber
+
+                        with pdfplumber.open(pdf_path) as pdf:
+                            st.image(pdf.pages[page_number - 1].to_image(
+                                resolution=100).original,
+                                caption=f"Original PDF, page {page_number}")
+                    except (OSError, IndexError, ValueError) as exc:
+                        st.caption(f"Original page preview unavailable: {exc}")
     if answer.claims:
         with st.expander("Model claims and indexed sources"):
             for claim in answer.claims:

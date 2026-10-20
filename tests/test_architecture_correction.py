@@ -220,7 +220,8 @@ def test_repeated_provider_searches_stop_after_one_reminder(monkeypatch):
     answer = _ask_openai(conn, "What is the fictional code?", 6)
     assert len(attempts) == 3
     assert "repeated" in answer.text.lower()
-    assert [item.get("reused") for item in answer.tool_calls] == [False, True, True]
+    assert [item.get("reused") for item in answer.tool_calls
+            if item["name"] == "search_documents"] == [False, True, True]
 
 
 def test_malformed_compatible_json_gets_one_generation_retry(monkeypatch):
