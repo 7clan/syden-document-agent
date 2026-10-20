@@ -395,3 +395,41 @@ guarantee for arbitrary PDFs or workbooks.
 The fresh corpus exposed a presentation issue, so its dates retest is a
 regression check rather than an untouched held-out measurement. No additional
 provider or arbitrary employer documents were tested in this exercise.
+
+## Harder unseen-folder interview exercise (2026-10-20)
+
+Five new fictional documents were generated under ignored
+`.local/interview_challenge_20261020`: a two-page contract, an approved
+variation, an inspection report, and two XLSX workbooks. The spreadsheets have
+a header on row 12, a repeated header, a separate approved-variation sheet,
+an AED-only optional sheet, and a date register. Expected facts were checked
+against the generated files: the three SAR items strictly over one million are
+P-101 (SAR 1,300,000; E13), P-102 (SAR 1,235,000; E14), and C-201
+(SAR 1,180,000; E5), totaling SAR 3,715,000. P-105 is exactly SAR 1,000,000
+and must be excluded. The AED optional item must not enter a SAR result.
+
+| Question | Live observation | Assessment |
+| --- | --- | --- |
+| Exact brief: list all cost items above SAR 1 million | Ollama Cloud called real document tools and returned the correct three cells and sum. Initially it falsely labeled coverage incomplete because an explicitly AED-only sheet existed. After a general currency-coverage fix, the same live question returned `deterministically_verified` with no warning. Gemini's attempt returned `provider_error` before an answer. | Ollama pass after fix; Gemini untested due request failure |
+| Exact brief: summarize the scope of work in this contract | Ollama cited contract page 1 and correctly included two 180 kW pumps, 65 metres of header, SCADA alarms, and operation/maintenance manuals. | Pass, evidence-linked |
+| Exact brief: extract all dates and deliverables | Ollama initially searched but never called `extract_dates`, so no date answer was shown. After a bounded, transparently application-initiated fallback, the live retest listed all nine indexed date occurrences with PDF pages or Excel cells. It did not explicitly repeat the inspection report's sentence that the proposed 15 October handover was unapproved. | Pass for candidate extraction; partial for date-status explanation |
+| Did CM-02 authorize solar or extend handover, and was 15 October approved? | Ollama's first request returned HTTP 500. Its retry gave the correct yes/no facts, but cited the contract and variation for the 15 October approval claim; only the inspection report establishes that status. Source linking labeled the claim evidence-linked because the cited passages existed and were retrieved. Gemini's attempt returned `provider_error` before an answer. | Fail on citation relevance; provider errors recorded separately |
+| What is the architect or consultant phone number? | Two Ollama attempts returned HTTP 500 during the tool phase. | Untested live; no answer was fabricated |
+
+The configured Gemini model was reachable through the model-availability API,
+but its two full answer requests failed with a safe generic diagnostic lacking
+an HTTP status. This exercise does not establish the cause. Ollama's HTTP 500s
+were also kept separate from answer-quality failures. The cross-document
+mis-citation is a known architectural limit: checking that a passage exists and
+was retrieved does not prove it supports every model claim. Another narrow
+keyword or negation rule would not establish general factual correctness, so
+the test records the failure and leaves source inspection necessary.
+
+The fixes prompted by this exercise are general: an explicitly foreign-currency
+amount sheet no longer makes a requested SAR query incomplete, while actual
+row/header currency conflicts still warn; and explicit exhaustive date
+questions receive one application-run `extract_dates` fallback when the model
+omits the tool. The audit labels that fallback as application initiated. These
+files and raw answers remain ignored under `.local/`, outside the PR.
+The currency and date retests use this same corpus after the fixes, so they are
+regression evidence rather than untouched held-out results.

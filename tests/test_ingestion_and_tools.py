@@ -134,10 +134,34 @@ def test_currency_is_not_inferred_from_other_amount_column(tmp_path):
     ingest_folder(conn, tmp_path)
     sar = query_spreadsheet(conn, currency="SAR", value=1_000_000)
     assert sar["total_matches"] == 0
-    assert sar["warnings"]
+    assert sar["incomplete"] is False
+    assert sar["warnings"] == []
     aed = query_spreadsheet(conn, currency="AED", value=1_000_000)
     assert aed["total_matches"] == 1
     assert aed["matches"][0]["citation"] == "mixed.xlsx | Mixed!B2"
+
+
+def test_foreign_currency_sheet_does_not_make_sar_results_incomplete(tmp_path):
+    book = Workbook()
+    sar = book.active
+    sar.title = "SAR Items"
+    sar.append(["Item", "Extended Total (SAR)"])
+    sar.append(["Included", 1_250_000])
+    sar.append(["Boundary", 1_000_000])
+    aed = book.create_sheet("AED Options")
+    aed.append(["Item", "Extended Total (AED)"])
+    aed.append(["Excluded", 2_000_000])
+    book.save(tmp_path / "mixed_sheets.xlsx")
+    conn = connect(tmp_path / "index.db")
+    assert ingest_folder(conn, tmp_path)["indexed"] == 1
+
+    result = query_spreadsheet(conn, currency="SAR", value=1_000_000)
+
+    assert result["total_matches"] == 1
+    assert result["matched_amount_sum"] == "1250000"
+    assert result["matches"][0]["citation"] == "mixed_sheets.xlsx | SAR Items!B2"
+    assert result["incomplete"] is False
+    assert result["warnings"] == []
 
 
 def test_sparse_rows_keep_actual_cell_addresses(tmp_path):

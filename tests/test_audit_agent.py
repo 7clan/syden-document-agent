@@ -11,6 +11,7 @@ from syden_agent.agent import (
     _final_answer,
     _needs_numeric_query,
     _question_filter,
+    _source_linked_answer,
     _supported_prose,
 )
 from syden_agent.db import connect
@@ -144,6 +145,19 @@ def test_date_answer_shows_complete_pdf_line_and_spreadsheet_row_status():
     assert "Background text preceding" not in answer.text
     assert answer.sources == ["Terms.pdf | page 1 | chunk 0",
                               "Plan.xlsx | Schedule!B3"]
+
+    fallback = _source_linked_answer(
+        conn, "No dates were found.", [], [{"name": "search_documents", "ok": True}],
+        "Extract all dates and deliverables.", date_called=False,
+    )
+    assert "12 January 2028" in fallback.text
+    assert "Civil inspection; Planning target, not contractual" in fallback.text
+    assert fallback.sources == answer.sources
+    assert fallback.tool_calls[-1] == {
+        "name": "host_dates_fallback", "ok": True, "origin": "application",
+        "reason": "Model did not call extract_dates; application ran it",
+    }
+    assert not any(call["name"] == "extract_dates" for call in fallback.tool_calls)
     conn.close()
 
 

@@ -131,7 +131,9 @@ checked independently and labeled **deterministically calculated** when coverage
 is complete. If a model retrieves documents but omits the required numeric tool,
 the application runs a read-only deterministic fallback and labels that action
 as application initiated in the audit trace. Candidate date extraction likewise
-remains a tool result; nearby text does not automatically prove a contractual obligation.
+remains a tool result. For explicit requests to list all dates, the application
+runs `extract_dates` once if the model omits it, and labels that fallback as
+application initiated. Nearby text does not automatically prove a contractual obligation.
 
 For a BOQ-subtotal-versus-contract comparison, the application retrieves each
 worksheet total separately and an explicit original contract value from indexed
@@ -157,8 +159,10 @@ gets at most one answer retry with indexed evidence; if it still reports absence
 the answer remains unverified and the retrieved locations are shown for review.
 If it uses the entire tool-round budget, one final
 generation request with tools disabled asks it to answer from the evidence already
-retrieved, or state that evidence is insufficient. A provider that returns no
-answer shows no source references, since search hits alone do not support a claim.
+retrieved, or state that evidence is insufficient. For prose questions, a provider
+that returns no answer shows no source references, since search hits alone do not
+support a claim. Deterministic numeric and date queries can still return their
+own checked source references.
 A provider may receive one formatting retry for malformed
 JSON, but there is no second model request just to judge the answer. The legacy
 `claim_verifier.py` and `semantic_verifier.py` remain for older offline regression
@@ -334,6 +338,12 @@ correctly against the original sources; Groq returned HTTP 429 before a focused
 answer. A separate four-document fictional held-out evaluation is recorded in
 [docs/TEST_PLAN.md](docs/TEST_PLAN.md). Passing those samples does not guarantee
 accuracy on arbitrary documents; evidence-linked answers still need source review.
+After a later, harder five-file fictional exercise, the local suite passed
+**253 tests with 1 skipped** and Ruff passed. Ollama answered the three exact
+brief examples after the currency and date fallback fixes. A cross-document
+answer cited the wrong PDF for one correct fact, and some Gemini/Ollama requests
+failed before answering;
+see [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for the observed results.
 
 ### Observed provider checks (2026-10-19)
 
@@ -359,6 +369,7 @@ Lite model returned 404 and the suggested replacement also returned 503.
 - PDF table extraction is heuristic. Borderless text-line BOQs are flagged for visual review, and rows without a verified currency are omitted from currency-filtered totals.
 - Complex merged Excel headings and unusual BOQ layouts still need human inspection of the selected column and warnings.
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
+- Source-linked status checks that a citation exists and was retrieved, not that it supports the model's specific claim. A harder cross-document live test produced a correct fact with the wrong cited passages; inspect the original source for important conclusions.
 - Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.
 - Missing-cache `.xlsx`/`.xlsm` formulas are flagged; calculation remains out of scope.

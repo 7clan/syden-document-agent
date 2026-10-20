@@ -1061,6 +1061,16 @@ def _verified_dates_answer(conn: sqlite3.Connection,
                   trace, result, "evidence_linked")
 
 
+def _dates_answer_with_fallback(conn: sqlite3.Connection,
+                                trace: list[dict[str, Any]],
+                                date_called: bool) -> Answer:
+    if not date_called:
+        trace = [*trace, {"name": "host_dates_fallback", "ok": True,
+                          "origin": "application",
+                          "reason": "Model did not call extract_dates; application ran it"}]
+    return _verified_dates_answer(conn, trace)
+
+
 _GEMINI_PRESENTATION_INTRO = re.compile(
     r"(?i)\A\s*based on the indexed (?:project )?documents,\s*"
     r"here is the summary of the scope of work"
@@ -1139,10 +1149,7 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
             numeric_args = {}
         return _verified_numeric_answer(conn, question, numeric_args, trace)
     if _needs_dates_query(question):
-        if not date_called:
-            return Answer("The date extraction tool was not called; no exhaustive date answer is available.",
-                          [], trace)
-        return _verified_dates_answer(conn, trace)
+        return _dates_answer_with_fallback(conn, trace, date_called)
 
     retrieved_list = _verified_sources(conn, citations)
     retrieved = set(retrieved_list)
@@ -1256,10 +1263,7 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
             numeric_args = {}
         return _verified_numeric_answer(conn, question, numeric_args, trace)
     if _needs_dates_query(question):
-        if not date_called:
-            return Answer("The date extraction tool was not called; no exhaustive date answer is available.",
-                          [], trace)
-        return _verified_dates_answer(conn, trace)
+        return _dates_answer_with_fallback(conn, trace, date_called)
     if not verified:
         return Answer("Not found in the indexed documents. No verified source evidence was retrieved.",
                       [], trace)

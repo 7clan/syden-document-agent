@@ -263,6 +263,7 @@ def query_spreadsheet(
             return
         code = next(iter(codes))
         if requested and code != requested:
+            # A known foreign currency is outside the requested result set.
             return
         total += 1
         sums[code] = sums.get(code, Decimal(0)) + amount
@@ -292,8 +293,6 @@ def query_spreadsheet(
                           "currency_verified": len(found.currency or fallback) == 1})
         if row["kind"] == "pdf" and row["method"] == "text_lines":
             warn(f"{row['file']} / {row['table']}: PDF text-line extraction needs visual review")
-        if requested and found.currency and requested not in found.currency:
-            warn(f"Currency {requested} conflicts with amount header in {row['file']} / {row['table']}")
 
     def choose_pending() -> None:
         if not pending:
