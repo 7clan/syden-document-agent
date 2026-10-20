@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from syden_agent.agent import _source_linked_answer
+from syden_agent.agent import _question_date_context, _source_linked_answer
 from syden_agent.db import connect
 
 
@@ -101,3 +101,44 @@ def test_numeric_questions_still_use_deterministic_spreadsheet_result():
     assert answer.verification_status == "deterministically_verified"
     assert answer.structured["matched_amount_sum"] == "1250000"
     assert answer.sources == ["Prices.xlsx | BOQ!B2"]
+
+
+def test_date_claim_cannot_borrow_unrelated_retrieved_citations():
+    conn = _sources()
+    conn.execute("INSERT INTO documents(id,path,kind,status) "
+                 "VALUES(3,'Decision.docx','docx','ready')")
+    conn.execute("INSERT INTO word_blocks(document_id,ordinal,kind,location,section,text) "
+                 "VALUES(3,1,'paragraph','paragraph 1','',"
+                 "'The proposed 15 October 2029 handover was not approved.')")
+    contract = "Fresh.xls | Gates | row 4"
+    decision = "Decision.docx | paragraph 1"
+    claim = "The proposed 15 October 2029 handover was not approved."
+    wrong = _source_linked_answer(conn, _draft(claim, contract), [contract, decision],
+                                  [{"name": "search_documents", "ok": True}])
+    assert wrong.claims[0]["status"] == "unverified"
+    assert wrong.claims[0]["reason"] == "Claimed date absent from cited passages"
+    assert wrong.sources == [contract]  # Still inspectable, never silently rewritten.
+    correct = _source_linked_answer(conn, _draft(claim, decision), [contract, decision],
+                                    [{"name": "search_documents", "ok": True}])
+    assert correct.claims[0]["status"] == "evidence_linked"
+
+
+def test_question_date_lookup_finds_decision_in_other_document():
+    conn = _sources()
+    conn.execute("INSERT INTO documents(id,path,kind,status) "
+                 "VALUES(3,'Inspection.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES"
+                 "(3,1,0,'The proposed 15 October 2029 handover was not approved.')")
+    context, citations = _question_date_context(
+        conn, "Did the change order approve 15 October 2029?", set())
+    assert citations == ["Inspection.pdf | page 1 | chunk 0"]
+    assert "not approved" in context
+
+
+def test_date_anchor_accepts_source_iso_and_claim_month_name():
+    conn = _sources()
+    citation = "Fresh.xls | Gates | row 4"
+    claim = "Final commissioning is due 14 February 2028."
+    answer = _source_linked_answer(conn, _draft(claim, citation), [citation],
+                                   [{"name": "inspect_document", "ok": True}])
+    assert answer.claims[0]["status"] == "evidence_linked"

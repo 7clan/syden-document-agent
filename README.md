@@ -116,9 +116,11 @@ still present in the indexed folder. The citation remains visible beside the
 source content. This helps a reviewer check a model's interpretation; it is
 not an automatic fact-verification verdict.
 
-The active path **does not run the old claim verifier**. It does not compare model
-prose, dates or status words against cited rows, so correct grouped Excel answers
-are no longer removed by per-row semantic checks. A valid citation establishes
+The active path **does not run the old claim verifier**. It does not judge model
+prose or approval status through broad semantic rules, so correct grouped Excel
+answers are no longer removed by per-row semantic checks. It does check that
+explicit dates in a claim occur somewhere in its cited passages, accepting
+equivalent unambiguous date formats. A valid citation establishes
 provenance, not factual correctness: a model can still misunderstand a passage or
 associate a short cell value with the wrong row. Such answers are labeled **AI answer
 with checked source references; facts not verified**. An invalid or unobserved
@@ -163,6 +165,11 @@ retrieved, or state that evidence is insufficient. For prose questions, a provid
 that returns no answer shows no source references, since search hits alone do not
 support a claim. Deterministic numeric and date queries can still return their
 own checked source references.
+A question naming a specific date also gets a bounded, application-initiated lookup
+for indexed passages containing that date after the model's first document tool call.
+Its audit event is labeled `host_date_context`; it is not represented as a model
+function call. This improves cross-document evidence delivery without proving
+the model's interpretation of an approval decision.
 A provider may receive one formatting retry for malformed
 JSON, but there is no second model request just to judge the answer. The legacy
 `claim_verifier.py` and `semantic_verifier.py` remain for older offline regression
@@ -344,6 +351,14 @@ brief examples after the currency and date fallback fixes. A cross-document
 answer cited the wrong PDF for one correct fact, and some Gemini/Ollama requests
 failed before answering;
 see [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for the observed results.
+The final pass used a new five-file fictional interview folder and the isolated
+six-file assessment folder. Ollama Gemma 4 31B answered all three original
+assessment-style questions on the new folder with source locations; Gemini 2.5
+Flash passed its available scope and BOQ checks, and Groq GPT-OSS 20B passed
+scope and a cross-document approval check. Other live calls hit provider 429,
+504, or read timeouts. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for the exact
+matrix; these results do not establish reliability on arbitrary employer files.
+The final offline suite passed **259 tests with 1 skipped**, and Ruff passed.
 
 ### Observed provider checks (2026-10-19)
 
@@ -369,7 +384,7 @@ Lite model returned 404 and the suggested replacement also returned 503.
 - PDF table extraction is heuristic. Borderless text-line BOQs are flagged for visual review, and rows without a verified currency are omitted from currency-filtered totals.
 - Complex merged Excel headings and unusual BOQ layouts still need human inspection of the selected column and warnings.
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
-- Source-linked status checks that a citation exists and was retrieved, not that it supports the model's specific claim. A harder cross-document live test produced a correct fact with the wrong cited passages; inspect the original source for important conclusions.
+- Source-linked status checks retrieved citation provenance and explicit date presence, not arbitrary semantic support. Inspect the original source for important conclusions.
 - Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.
 - Missing-cache `.xlsx`/`.xlsm` formulas are flagged; calculation remains out of scope.

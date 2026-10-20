@@ -19,8 +19,10 @@ from dotenv import load_dotenv
 from .claim_verifier import _explicit_files, parse_answer, question_parts, validate_claims
 from .semantic_verifier import verify_judgement
 from .tools import (
+    DATE_REGEX,
     TOOL_SCHEMAS,
     TOOLS,
+    _date_info,
     _num,
     _search_excerpt,
     extract_dates,
@@ -56,7 +58,11 @@ For a final prose answer, return ONLY a JSON object with keys answer (string),
 insufficient (boolean), and claims (array). Each claim has text (one factual
 statement) and supports (array of {citation}). Use only exact citations returned
 by tools in this conversation. Split different row dates and amounts into separate
-claims where practical. Set insufficient=true when the evidence cannot answer.
+claims where practical. Each support must directly establish that claim; a source
+about the same project or an unchanged deadline does not establish whether a
+different proposed date was approved. Search for the specific decision record
+before answering approval questions. Set insufficient=true when the evidence
+cannot answer.
 The application displays your claims alongside the original indexed source text
 or cells. Python checks that cited locations were retrieved, but does not check
 whether your interpretation of the evidence is true. Do not make a corpus-wide
@@ -227,7 +233,17 @@ def _provider_error_code(exc: Exception) -> str:
 def provider_error_diagnostic(exc: Exception) -> dict[str, Any]:
     """Only fixed-size provider metadata, never API bodies or generated text."""
     status = getattr(exc, "status_code", None)
-    raw_code = getattr(exc, "safe_code", None) or _provider_error_code(exc)
+    if not isinstance(status, int):
+        # google-genai APIError exposes the HTTP number as `code`.
+        status = getattr(exc, "code", None)
+    raw_code = (getattr(exc, "safe_code", None) or _provider_error_code(exc)
+                or getattr(exc, "status", None))
+    if not raw_code and type(exc).__name__ == "APITimeoutError":
+        raw_code = "timeout"
+    if not raw_code and type(exc).__name__ == "APIConnectionError":
+        raw_code = "connection_error"
+    if isinstance(raw_code, str):
+        raw_code = raw_code.lower()
     code = (raw_code if isinstance(raw_code, str)
             and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw_code) else "provider_error")
     phase = getattr(exc, "request_phase", None) or getattr(exc, "_syden_phase", None)
@@ -263,9 +279,13 @@ def safe_provider_error(exc: Exception, provider: str) -> str:
             return message
     label = {"groq": "Groq", "ollama_cloud": "Ollama Cloud", "openai": "OpenAI",
              "gemini": "Gemini", "compatible": "Model provider"}.get(provider, "Model provider")
-    status = getattr(exc, "status_code", None)
+    status = provider_error_diagnostic(exc)["http_status"]
     if status == 429:
         return f"{label} rate limit reached. Please retry shortly."
+    if provider_error_diagnostic(exc)["code"] == "timeout":
+        return f"{label} timed out during the request. Please retry shortly."
+    if provider_error_diagnostic(exc)["code"] == "connection_error":
+        return f"Could not connect to {label}. Check the connection and retry."
     if status == 400:
         diagnostic = provider_error_diagnostic(exc)
         return (f"{label} rejected the {diagnostic['phase']} request "
@@ -303,12 +323,17 @@ def _retry_after_seconds(exc: Exception) -> float | None:
 
 def _rate_limited_create(create: Callable[..., Any], request: dict[str, Any],
                          provider: str, deadline: float) -> Any:
-    """Retry one 429 only when its provider-specified wait fits our time budget."""
+    """Bound retries for rate limits and transient Ollama Cloud server errors."""
     for attempt in range(2):
         try:
             return create(**request)
         except Exception as exc:
-            if getattr(exc, "status_code", None) != 429:
+            status = getattr(exc, "status_code", None)
+            if (provider == "ollama_cloud" and status in {500, 502, 503, 504}
+                    and attempt == 0 and time.monotonic() + 0.5 < deadline):
+                time.sleep(0.5)
+                continue
+            if status != 429:
                 raise
             wait = _retry_after_seconds(exc)
             if (attempt or wait is None or wait > 8
@@ -359,6 +384,52 @@ def _evidence_handoff(conn: sqlite3.Connection, citations: list[str], query: str
         if len(sections) >= 8:
             break
     return "\n".join(sections), included
+
+
+def _date_keys(text: str) -> set[str]:
+    """Extract only explicit date anchors; never infer approval or deadlines."""
+    keys = set()
+    for match in DATE_REGEX.finditer(text):
+        literal = " ".join(match.group().casefold().split())
+        normalized, ambiguous = _date_info(match.group())
+        keys.add(normalized if normalized and not ambiguous else literal)
+    return keys
+
+
+def _claim_excerpt(original: str, claim: str, width: int = 700) -> str:
+    """Display an original window near the claim's longest literal word span."""
+    if len(original) <= width:
+        return original
+    words = re.findall(r"\w+", claim.casefold())[:50]
+    for size in range(min(6, len(words)), 1, -1):
+        for index in range(len(words) - size + 1):
+            phrase = r"\b" + r"\s+".join(map(re.escape, words[index:index + size])) + r"\b"
+            match = re.search(phrase, original, re.IGNORECASE)
+            if match:
+                start = max(0, min(match.start() - width // 4, len(original) - width))
+                return original[start:start + width]
+    terms = [term for term in words if len(term) >= 4 or term.isdigit()]
+    return _search_excerpt(original, terms, width)
+
+
+def _question_date_context(conn: sqlite3.Connection, question: str,
+                           sent: set[tuple[str, str]]) -> tuple[str, list[str]]:
+    """Hand off passages containing dates named in the question, across files."""
+    dates = list(dict.fromkeys(match.group() for match in DATE_REGEX.finditer(question)))[:3]
+    citations: list[str] = []
+    for date in dates:
+        expected = _date_keys(date)
+        for hit in search_documents(conn, date, limit=20).get("results", []):
+            citation = hit["citation"]
+            original = _evidence_text(get_evidence(conn, citation))
+            if expected and expected.issubset(_date_keys(original)):
+                citations.append(citation)
+            if len(citations) >= 8:
+                break
+        if len(citations) >= 8:
+            break
+    context, _ = _evidence_handoff(conn, citations, question, sent, budget=5000)
+    return context, list(dict.fromkeys(citations))
 
 
 def _cross_document_amount_question(question: str) -> bool:
@@ -1175,6 +1246,7 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
         supports = entry.get("supports")
         supports = supports[:8] if isinstance(supports, list) else []
         local: list[dict[str, str]] = []
+        original_texts: list[str] = []
         missing = False
         for support in supports:
             citation = support.get("citation") if isinstance(support, dict) else None
@@ -1192,12 +1264,14 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
                 missing = True
                 continue
             if citation not in [item["citation"] for item in local]:
-                relevant = _search_excerpt(
-                    original, re.findall(r"\w+", question.casefold()), 1000)
+                relevant = _claim_excerpt(original, statement)
                 local.append({"citation": citation, "quote": relevant})
+                original_texts.append(original)
                 sources.append(citation)
-        status = "evidence_linked" if local and not missing else "unverified"
-        reason = ("Retrieved source; model interpretation was not checked" if
+        unmatched_dates = _date_keys(statement) - _date_keys("\n".join(original_texts))
+        status = "evidence_linked" if local and not missing and not unmatched_dates else "unverified"
+        reason = ("Claimed date absent from cited passages" if unmatched_dates else
+                  "Retrieved source; model interpretation was not checked" if
                   status == "evidence_linked" else
                   "A cited source was not retrieved or had no indexed passage")
         claims.append({"text": statement, "status": status,
@@ -1205,7 +1279,8 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
                        "quotes": local, "reason": reason})
         reference = ", ".join(item["citation"] for item in local)
         rendered.append((f"- {statement} — {reference}" +
-                         (" *(another source reference unavailable)*" if missing else ""))
+                         (" *(date absent from cited passages)*" if unmatched_dates else
+                          " *(another source reference unavailable)*" if missing else ""))
                         if reference else
                         f"- {statement} *(source reference unavailable)*")
 
@@ -1470,10 +1545,21 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     evidence_retry = False
     format_retry = False
     financial_context_sent = False
+    question_date_context_sent = False
     financial_context = ""
     table_context_sent = False
     table_context = ""
     deadline = time.monotonic() + 75
+
+    def send_gemini(*, contents: list[Any], config: Any, phase: str) -> Any:
+        try:
+            return client.models.generate_content(model=model, contents=contents, config=config)
+        except Exception as exc:
+            try:
+                exc._syden_phase = phase
+            except (AttributeError, TypeError):
+                pass
+            raise
 
     def compact_final(reason: str) -> str:
         terms = {term for term in re.findall(r"\w+", question.casefold())
@@ -1497,16 +1583,16 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
         final_config = types.GenerateContentConfig(
             system_instruction=SYSTEM, temperature=0,
             response_mime_type="application/json")
-        final_response = client.models.generate_content(
-            model=model, contents=[types.Content(role="user", parts=[
-                types.Part.from_text(text=prompt)])], config=final_config)
+        final_response = send_gemini(
+            contents=[types.Content(role="user", parts=[
+                types.Part.from_text(text=prompt)])], config=final_config, phase="final")
         return _gemini_text(final_response)
 
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
             return Answer("Provider time budget reached; narrow the question and retry.",
                           [], tool_calls)
-        response = client.models.generate_content(model=model, contents=contents, config=config)
+        response = send_gemini(contents=contents, config=config, phase="tool")
         calls = response.function_calls or []
         if not calls:
             text = _gemini_text(response)
@@ -1590,6 +1676,18 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                                "source_count": len(handoff_citations),
                                "citations": handoff_citations,
                                "visible_chars": len(visible)})
+        if not question_date_context_sent:
+            date_context, date_citations = _question_date_context(
+                conn, question, sent_evidence)
+            if date_context:
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                    text="Original indexed passages matching dates named in the question:\n" +
+                         date_context)]))
+                citations.extend(date_citations)
+                tool_calls.append({"name": "host_date_context", "ok": True,
+                                   "origin": "application", "source_count": len(date_citations),
+                                   "visible_chars": len(date_context)})
+            question_date_context_sent = True
         if not financial_context_sent:
             financial, financial_citations, incomplete = _financial_comparison_context(
                 conn, question)
@@ -1709,6 +1807,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     format_retry = False
     evidence_retry = False
     financial_context_sent = False
+    question_date_context_sent = False
     financial_context = ""
     table_context_sent = False
     table_context = ""
@@ -1896,6 +1995,18 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                           "source_count": len(handoff_citations),
                           "citations": handoff_citations,
                           "visible_chars": len(visible)})
+        if not question_date_context_sent:
+            date_context, date_citations = _question_date_context(
+                conn, question, sent_evidence)
+            if date_context:
+                messages.append({"role": "user", "content":
+                                 "Original indexed passages matching dates named in the question:\n" +
+                                 date_context})
+                citations.extend(date_citations)
+                trace.append({"name": "host_date_context", "ok": True,
+                              "origin": "application", "source_count": len(date_citations),
+                              "visible_chars": len(date_context)})
+            question_date_context_sent = True
         if not financial_context_sent:
             financial, financial_citations, incomplete = _financial_comparison_context(
                 conn, question)

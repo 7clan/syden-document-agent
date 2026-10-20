@@ -433,3 +433,70 @@ omits the tool. The audit labels that fallback as application initiated. These
 files and raw answers remain ignored under `.local/`, outside the PR.
 The currency and date retests use this same corpus after the fixes, so they are
 regression evidence rather than untouched held-out results.
+
+## Final release exercise (2026-10-20)
+
+The Streamlit server started on port 8502. Its health endpoint returned HTTP 200,
+and 11 headless Streamlit AppTest cases covering document management, model
+selection and source inspection passed. No browser automation was available, so
+the visual click-through remains a manual demo step. The production `ask()` path
+was called with real provider APIs and isolated SQLite indexes; an HTTP response
+alone was not counted as a UI or answer-quality pass.
+
+The isolated six-file folder contained exactly three PDFs, two XLSX files and
+one DOCX. Gemini 2.5 Flash answered original contract scope, the SAR 1 million
+BOQ threshold (EL-101, EL-102, EL-105; SAR 4,335,000), all 19 indexed date
+occurrences, and the change-order/meeting approval question correctly against
+the files. Its BOQ result used `query_spreadsheet`; the approval claims cited
+the change order and the meeting paragraph separately. Groq GPT-OSS 20B passed
+scope and the cross-document approval question with real search tool calls.
+Ollama Gemma 4 31B passed scope; its separate approval attempt timed out.
+
+A new, previously unused fictional interview folder was generated under ignored
+`.local/final_unseen_20261020`: two PDFs, two XLSX workbooks and one DOCX.
+The source files establish two 320 kW chillers, 90 metres of pipe, control panel
+CP-7, and rooftop solar/landscaping exclusions. The base BOQ has CH-101 at
+SAR 1,340,000 (E6), CH-102 at SAR 1,220,000 (E7), CH-103 at exactly
+SAR 1,000,000 (E8), and CH-104 at SAR 700,000 (E9). Thus strict `> SAR 1m`
+returns two items totaling SAR 2,560,000; the base subtotal and original PDF
+contract sum are both SAR 4,260,000. CN-11 adds 35 metres of Annex C pipe and
+SAR 275,000 without extending 30 June 2028. The proposed 15 July 2028
+handover was not approved in the meeting minutes. These expected values were
+checked against the generated source documents and CLI index, not the model's
+verification label.
+
+| Fresh interview question type | Ollama Gemma 4 31B observed result |
+| --- | --- |
+| Scope and exclusions | Correct, PDF page citation |
+| All BOQ items strictly over SAR 1m | CH-101/E6 and CH-102/E7, SAR 2,560,000; deterministic result |
+| All dates and deliverables | All 13 indexed occurrences; context shows contractual, planning and unapproved labels; source-linked candidate list |
+| CN-11, solar, deadline and proposed-date approval | Correct three decisions; notice and meeting citations separated |
+| Base BOQ versus original contract sum | Correct equality at SAR 4,260,000; Python checked the separate operands |
+| Missing consultant phone/payment schedule | No invented detail; absence remains unverified, with inspectable candidate source |
+| Exactly SAR 1m boundary item | Correctly says CH-103 does not exceed threshold; E8 cited |
+| Independent Annex C quantity sources | Correct notice PDF, variation sheet row 2 and meeting paragraph 2 |
+
+Other provider observations on the same new folder: Gemini 2.5 Flash passed
+the BOQ calculation, then two subsequent attempts returned HTTP 429. Groq
+GPT-OSS 20B passed scope/exclusions, then a BOQ request returned HTTP 429 with
+an approximately 19-second retry suggestion. Gemini 3.5 Flash Lite passed the
+six-file scope question, but its BOQ attempt failed before an answer and two
+later tool-phase requests returned HTTP 504 `deadline_exceeded`. Ollama GPT-OSS
+120B twice timed out at the client on the earlier cross-document challenge;
+its answer quality after this change remains untested. The configured Groq
+account listed GPT-OSS 20B/120B and Qwen, but no Gemma model, so a Groq Gemma
+test was unavailable. OpenAI was not tested because no key was configured.
+
+The earlier wrong-citation challenge was addressed by making explicit dates in
+questions retrieve their matching indexed passages across documents and by
+marking a cited claim unverified if its explicit date occurs in none of its
+cited passages. This is a provenance guard, not a semantic approval verifier.
+The real Ollama GPT-OSS 120B retest was blocked by timeouts; the new unseen
+Ollama Gemma approval question did cite the correct meeting paragraph. A
+separate mocked regression checks the original wrong-date-citation pattern.
+Remaining risk: a model may attach a plausible but irrelevant citation to a
+claim without an explicit date, or misinterpret a passage. Source-linked means
+the original location is inspectable, not that the claim is guaranteed true.
+After these changes, `python -m pytest -q` passed 259 tests with 1 skipped;
+`ruff check src tests app.py scripts` passed. The fresh CLI indexed all five
+files and independently returned CH-101/E6 and CH-102/E7 for strict SAR 1m.

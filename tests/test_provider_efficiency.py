@@ -9,6 +9,8 @@ from syden_agent.agent import (
     _model_tool_result,
     _rate_limited_create,
     _retry_after_seconds,
+    provider_error_diagnostic,
+    safe_provider_error,
 )
 
 
@@ -61,6 +63,60 @@ def test_retry_after_ms_and_missing_header():
     assert _retry_after_seconds(error) == 1.75
     error.response.headers = {}
     assert _retry_after_seconds(error) is None
+
+
+def test_gemini_http_diagnostic_is_sanitized_and_phase_specific():
+    error = RuntimeError("private response body")
+    error.code = 503
+    error.status = "UNAVAILABLE"
+    error._syden_phase = "tool"
+    assert provider_error_diagnostic(error) == {
+        "http_status": 503, "code": "unavailable", "phase": "tool"}
+    assert safe_provider_error(error, "gemini") == (
+        "Gemini is temporarily unavailable (HTTP 503). Please retry shortly.")
+
+
+def test_ollama_timeout_has_safe_specific_message():
+    class APITimeoutError(Exception):
+        pass
+
+    error = APITimeoutError("private request data")
+    error._syden_phase = "tool"
+    assert provider_error_diagnostic(error) == {
+        "http_status": None, "code": "timeout", "phase": "tool"}
+    assert safe_provider_error(error, "ollama_cloud") == (
+        "Ollama Cloud timed out during the request. Please retry shortly.")
+
+
+def test_ollama_server_error_retried_once_without_replaying_history(monkeypatch):
+    waits = []
+    monkeypatch.setattr("syden_agent.agent.time.sleep", waits.append)
+
+    class ServerError(Exception):
+        status_code = 500
+
+    calls = []
+
+    def recover(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ServerError("private response body")
+        return "answer"
+
+    request = {"messages": [{"role": "user", "content": "question"}]}
+    assert _rate_limited_create(recover, request, "ollama_cloud", float("inf")) == "answer"
+    assert calls == [request, request]
+    assert waits == [0.5]
+
+    calls.clear()
+
+    def persistent(**kwargs):
+        calls.append(kwargs)
+        raise ServerError("private response body")
+
+    with pytest.raises(ServerError):
+        _rate_limited_create(persistent, request, "ollama_cloud", float("inf"))
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("provider,label", [
