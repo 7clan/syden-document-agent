@@ -109,6 +109,13 @@ still exists in the local index. The interface shows the model's wording beside 
 original PDF/Word text or Excel cells. Model-supplied quotations are ignored; displayed
 source text comes from the index.
 
+Each passage-level source reference has an **Open source** button. It opens the
+exact indexed PDF page and chunk, Word paragraph or table row, or Excel row or
+cell. For local PDFs, the panel also renders the original page when the file is
+still present in the indexed folder. The citation remains visible beside the
+source content. This helps a reviewer check a model's interpretation; it is
+not an automatic fact-verification verdict.
+
 The active path **does not run the old claim verifier**. It does not compare model
 prose, dates or status words against cited rows, so correct grouped Excel answers
 are no longer removed by per-row semantic checks. A valid citation establishes
@@ -125,7 +132,11 @@ is complete. Candidate date extraction likewise remains a tool result; nearby
 text does not automatically prove a contractual obligation.
 
 The model still calls read-only document tools before answering. Repeated calls
-are cached and bounded. A provider may receive one formatting retry for malformed
+are cached and bounded. If it uses the entire tool-round budget, one final
+generation request with tools disabled asks it to answer from the evidence already
+retrieved, or state that evidence is insufficient. A provider that returns no
+answer shows no source references, since search hits alone do not support a claim.
+A provider may receive one formatting retry for malformed
 JSON, but there is no second model request just to judge the answer. The legacy
 `claim_verifier.py` and `semantic_verifier.py` remain for older offline regression
 experiments; neither filters claims in the live provider path. For ambiguous
@@ -257,6 +268,11 @@ After removing claim interpretation checks from the active provider path on
 2026-10-20, the local suite passed **214 tests with 1 skipped** and Ruff passed.
 The new fictional PDF/XLS/XLSX live results, including a remaining Groq BOQ
 HTTP 400 parsing failure, are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
+After the source inspector and final-answer tool-budget fix on 2026-10-20, the
+local suite passed **219 tests with 1 skipped** and Ruff passed. A live
+`gemini-3.5-flash-lite` retest answered the five-milestone demo question with
+schedule rows 2–6. An Ollama Cloud retest returned HTTP 500, and a second
+attempt returned empty answer content; its live result remains unconfirmed.
 
 ### Observed provider checks (2026-10-19)
 

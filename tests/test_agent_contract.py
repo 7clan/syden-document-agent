@@ -174,6 +174,94 @@ def test_gemini_tool_loop_returns_structured_claim_without_verification_call(mon
     assert answer.tool_calls[-1]["name"] == "source_linking"
 
 
+def test_gemini_tool_budget_still_generates_answer(monkeypatch):
+    from google import genai
+    from google.genai import types
+
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('Memo.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'The fictional milestone is ARBOR-17.')")
+    citation = "Memo.pdf | page 1 | chunk 0"
+    tool = SimpleNamespace(function_calls=[SimpleNamespace(
+        name="search_documents", args={"query": "ARBOR-17"}, id="one")],
+        candidates=[SimpleNamespace(content=types.Content(
+            role="model", parts=[types.Part.from_text(text="Searching")]))])
+    final = SimpleNamespace(function_calls=[], text=(
+        '{"answer":"The milestone is ARBOR-17","insufficient":false,'
+        '"claims":[{"text":"The milestone is ARBOR-17",'
+        '"supports":[{"citation":"Memo.pdf | page 1 | chunk 0"}]}]}'))
+    requests = []
+
+    def generate_content(**kwargs):
+        requests.append(kwargs)
+        return [tool, final][len(requests) - 1]
+
+    monkeypatch.setattr(genai, "Client", lambda **_: SimpleNamespace(models=SimpleNamespace(
+        generate_content=generate_content)))
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-only")
+    answer = _ask_gemini(conn, "What is the milestone?", 1)
+    assert answer.sources == [citation]
+    assert answer.verification_status == "evidence_linked"
+    assert len(requests) == 2
+    assert requests[0]["config"].tools
+    assert not requests[1]["config"].tools
+
+
+def test_ollama_tool_budget_still_generates_answer(monkeypatch):
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('Memo.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'The fictional milestone is ARBOR-17.')")
+    tool = SimpleNamespace(tool_calls=[SimpleNamespace(id="one", function=SimpleNamespace(
+        name="search_documents", arguments='{"query":"ARBOR-17"}'))],
+        content=None, model_dump=lambda exclude_none: {"role": "assistant", "tool_calls": []})
+    final = SimpleNamespace(tool_calls=None, content=(
+        '{"answer":"The milestone is ARBOR-17","insufficient":false,'
+        '"claims":[{"text":"The milestone is ARBOR-17",'
+        '"supports":[{"citation":"Memo.pdf | page 1 | chunk 0"}]}]}'))
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(message=[tool, final][
+            len(requests) - 1])])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: client))
+    monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-only")
+    monkeypatch.setenv("OLLAMA_MODEL", "mock-model")
+    answer = _ask_openai(conn, "What is the milestone?", 1, provider="ollama_cloud")
+    assert answer.verification_status == "evidence_linked"
+    assert len(requests) == 2
+    assert requests[-1]["tool_choice"] == "none"
+    assert "tools" not in requests[-1]
+
+
+def test_empty_final_answer_does_not_present_retrieval_hits_as_sources(monkeypatch):
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('Memo.pdf','pdf','ready')")
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) "
+                 "VALUES(1,1,0,'A source passage without an answer.')")
+    tool = SimpleNamespace(tool_calls=[SimpleNamespace(id="one", function=SimpleNamespace(
+        name="search_documents", arguments='{"query":"source passage"}'))],
+        content=None, model_dump=lambda exclude_none: {"role": "assistant", "tool_calls": []})
+    final = SimpleNamespace(tool_calls=None, content="")
+    responses = [tool, final]
+
+    def create(**_kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=responses.pop(0))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: client))
+    monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-only")
+    monkeypatch.setenv("OLLAMA_MODEL", "mock-model")
+    answer = _ask_openai(conn, "What does it say?", 1, provider="ollama_cloud")
+    assert answer.verification_status == "unverified"
+    assert answer.sources == []
+    assert "returned no answer" in answer.text
+
+
 def test_openai_unsupported_native_schema_retries_with_instructed_json(monkeypatch):
     conn = connect(":memory:")
     conn.execute("INSERT INTO documents(path,kind,status) VALUES('note.pdf','pdf','ready')")

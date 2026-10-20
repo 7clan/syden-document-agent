@@ -14,6 +14,7 @@ from syden_agent.agent import ask
 from syden_agent.db import connect
 from syden_agent.file_manager import folder_files, remove_document
 from syden_agent.ingest import ingest_folder
+from syden_agent.source_viewer import local_pdf_page, source_detail
 from syden_agent.tools import extract_dates, list_documents, query_spreadsheet
 from syden_agent.ui_format import display_safe_rows
 from syden_agent.uploads import save_uploaded_file
@@ -61,6 +62,7 @@ with st.sidebar:
     selection = (provider, selected_model)
     if st.session_state.get("_llm_selection") != selection:
         st.session_state.pop("last_answer", None)
+        st.session_state.pop("open_source", None)
         st.session_state.pop("csv_export", None)
         st.session_state["_llm_selection"] = selection
     st.caption(f"Selected: {provider_label} / {selected_model or 'Choose a model'}")
@@ -72,6 +74,7 @@ with st.sidebar:
         with st.spinner("Reading documents..."):
             st.session_state["index_report"] = ingest_folder(conn, folder)
             st.session_state.pop("last_answer", None)
+            st.session_state.pop("open_source", None)
             st.session_state.pop("csv_export", None)
     st.caption(f"Add files here to: {Path(folder).expanduser().resolve()}")
     revision = st.session_state.get("_document_upload_revision", 0)
@@ -249,8 +252,46 @@ if "last_answer" in st.session_state:
     st.markdown(answer.text)
     st.subheader("Source references")
     if answer.sources:
-        for source in answer.sources:
-            st.code(source)
+        precise_sources = [source for source in answer.sources
+                           if not source.endswith(" | document")]
+        for index, source in enumerate(precise_sources):
+            label, control = st.columns([5, 1])
+            label.code(source)
+            if control.button("Open source", key=f"source_{index}"):
+                st.session_state["open_source"] = source
+        if not precise_sources:
+            st.info("Only document names were retrieved; no exact passage or row was cited.")
+        selected_source = st.session_state.get("open_source")
+        if selected_source in precise_sources:
+            detail = source_detail(conn, selected_source)
+            st.markdown("#### Indexed source location")
+            st.code(selected_source)
+            if "error" in detail:
+                st.warning(detail["error"])
+            else:
+                evidence = detail["evidence"]
+                if "row" in evidence:
+                    st.table([{"Cell": column, "Indexed value": value}
+                              for column, value in evidence["row"].items()])
+                    if "value" in evidence:
+                        st.caption("Cited cell value: " + str(evidence["value"].get("value")))
+                else:
+                    if evidence.get("section"):
+                        st.caption("Section: " + str(evidence["section"]))
+                    st.text(evidence.get("text", ""))
+                if detail["kind"] == "pdf":
+                    location = local_pdf_page(conn, selected_source)
+                    if location:
+                        pdf_path, page_number = location
+                        try:
+                            import pdfplumber
+
+                            with pdfplumber.open(pdf_path) as pdf:
+                                st.image(pdf.pages[page_number - 1].to_image(
+                                    resolution=100).original,
+                                    caption=f"Original PDF, page {page_number}")
+                        except (OSError, IndexError, ValueError) as exc:
+                            st.caption(f"Original page preview unavailable: {exc}")
     else:
         st.info("No usable citations returned. Do not rely on unsupported claims.")
     if answer.claims:

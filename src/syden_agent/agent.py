@@ -778,8 +778,10 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
     retrieved = set(retrieved_list)
     payload = parse_answer(text)
     if payload is None:
-        return Answer(text.strip() or "The provider returned no answer text.",
-                      [cite for cite in retrieved_list if not cite.endswith(" | document")],
+        message = ("The provider returned no answer after using document tools. "
+                   "Try again with an explicit filename or a narrower question."
+                   if not text.strip() else text.strip())
+        return Answer(message, [],
                       [*trace, {"name": "source_linking", "ok": False,
                                 "reason": "No structured claim citations were available"}],
                       verification_status="unverified")
@@ -1065,7 +1067,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
             return Answer("Provider time budget reached; narrow the question and retry.",
-                          _verified_sources(conn, citations), tool_calls)
+                          [], tool_calls)
         response = client.models.generate_content(model=model, contents=contents, config=config)
         calls = response.function_calls or []
         if not calls:
@@ -1085,7 +1087,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                                          numeric_args, _has_dates_result(tool_calls))
         if not response.candidates or response.candidates[0].content is None:
             return Answer("Provider returned tool calls without usable message content.",
-                          _verified_sources(conn,citations), tool_calls)
+                          [], tool_calls)
         contents.append(response.candidates[0].content)
         parts = []
         all_repeated = True
@@ -1111,13 +1113,26 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
         if stalled >= 2:
             return Answer("The provider repeated the same searches without new evidence. "
                           "Please narrow the question.",
-                          _verified_sources(conn, citations), tool_calls)
+                          [], tool_calls)
         if stalled:
             contents.append(types.Content(role="user", parts=[types.Part.from_text(
                 text="Those tool results were already returned. Finish with a JSON answer "
                      "using available evidence, or set insufficient=true.")]))
-    return Answer("Tool-call limit reached. Evidence below may be incomplete.",
-                  _verified_sources(conn, citations), tool_calls)
+    if not tool_calls:
+        return Answer("No document evidence was retrieved within the tool-call limit.", [],
+                      tool_calls)
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(
+        text="Tool use is complete. Answer now as JSON using only the evidence already "
+             "retrieved. Cite exact passage or row references for each claim. If the "
+             "evidence is insufficient, set insufficient=true and say what is missing.")]))
+    if time.monotonic() >= deadline:
+        return Answer("Provider time budget reached before answer generation.", [], tool_calls)
+    final_config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0)
+    response = client.models.generate_content(model=model, contents=contents,
+                                              config=final_config)
+    return _source_linked_answer(conn, (response.text or "").strip(), citations,
+                                 tool_calls, question, numeric_args,
+                                 _has_dates_result(tool_calls))
 
 
 def _compatible_config(provider: str, model_override: str | None = None) -> tuple[str, str, str]:
@@ -1171,7 +1186,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
             return Answer("Provider time budget reached; narrow the question and retry.",
-                          _verified_sources(conn, citations), trace)
+                          [], trace)
         request = {
             "model": model, "messages": messages, "tools": schemas,
             "tool_choice": ("none" if format_retry else
@@ -1251,13 +1266,31 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
         if stalled >= 2:
             return Answer("The provider repeated the same searches without new evidence. "
                           "Please narrow the question.",
-                          _verified_sources(conn, citations), trace)
+                          [], trace)
         if stalled:
             messages.append({"role": "user", "content":
                              "Those tool results were already returned. Finish with a JSON "
                              "answer using available evidence, or set insufficient=true."})
-    return Answer("Tool-call limit reached. Evidence below may be incomplete.",
-                  _verified_sources(conn,citations),trace)
+    if not trace:
+        return Answer("No document evidence was retrieved within the tool-call limit.", [],
+                      trace)
+    messages.append({"role": "user", "content":
+                     "Tool use is complete. Answer now as JSON using only the evidence "
+                     "already retrieved. Cite exact passage or row references for each "
+                     "claim. If evidence is insufficient, set insufficient=true and say "
+                     "what is missing."})
+    if time.monotonic() >= deadline:
+        return Answer("Provider time budget reached before answer generation.", [], trace)
+    request = {"model": model, "messages": messages, "tool_choice": "none",
+               "temperature": 0}
+    if native_schema:
+        request["response_format"] = {"type": "json_schema", "json_schema": {
+            "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
+    response = _rate_limited_create(client.chat.completions.create,
+                                    request, provider, deadline)
+    return _source_linked_answer(conn, (response.choices[0].message.content or "").strip(),
+                                 citations, trace, question, numeric_args,
+                                 _has_dates_result(trace))
 
 
 def ask(conn: sqlite3.Connection, question: str, max_rounds: int = 8,

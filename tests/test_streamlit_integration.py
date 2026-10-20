@@ -67,4 +67,20 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     assert not page.exception
     assert any("AI answer with checked source references" in item.value
                for item in page.caption)
+    source_button = next(button for button in page.button
+                         if button.label == "Open source")
+    source_button.click().run()
+    assert not page.exception
+    assert any("Indexed source location" in title.value for title in page.markdown)
+    assert any("Submit design drawings" in item.value for item in page.text)
+    page.session_state["last_answer"] = Answer(
+        "Transformer amount", ["BOQ.xlsx | BOQ SAR!B2"],
+        [{"name": "query_spreadsheet", "args": {"value": 1_000_000,
+                                                 "currency": "SAR"}, "ok": True}],
+        verification_status="evidence_linked",
+    )
+    page.run()
+    next(button for button in page.button if button.label == "Open source").click().run()
+    assert not page.exception
+    assert any("Cited cell value: 1500000" in item.value for item in page.caption)
     conn.close()
