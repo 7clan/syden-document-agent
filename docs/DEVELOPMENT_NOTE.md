@@ -1,11 +1,11 @@
 # Development note for SYDEN
 
-I used OpenAI Codex inside VS Code as my AI coding agent. As of 20 October 2026,
-I have spent **well over eight hours of my own active time** across 19–20 October
-2026, planning, working with Codex, reviewing changes, testing the application,
-troubleshooting API and verification issues, and checking results. I did not
-track the exact total, so I am not presenting a more precise figure. Development
-is ongoing; this replaces my earlier 6–8 hour estimate.
+I used OpenAI Codex inside VS Code as my AI coding agent. I spent approximately
+**11 hours** actively working on the project across 19–20 October 2026,
+including planning, collaborating with Codex, reviewing implementations,
+debugging, conducting live provider tests, and verifying results. This is an
+estimate based on my development activity, excluding unattended AI execution
+time.
 
 Codex helped inspect the starter repository, implement the Python ingestion and
 query modules, integrate LLM function calling, and write synthetic regression
