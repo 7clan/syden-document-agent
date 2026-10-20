@@ -27,8 +27,10 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     app = Path(__file__).resolve().parents[1] / "app.py"
     page = AppTest.from_file(app, default_timeout=10).run()
     assert not page.exception
-    page.text_input[0].set_value(str(tmp_path)).run()
-    page.sidebar.button[0].click().run()
+    next(field for field in page.sidebar.text_input
+         if field.label == "Folder path on this computer").set_value(str(tmp_path)).run()
+    next(button for button in page.sidebar.button
+         if button.label == "Index folder").click().run()
     assert not page.exception
     conn = connect(db_path)
     result = query_spreadsheet(conn, currency="SAR", value=1_000_000)
