@@ -395,6 +395,7 @@ Lite model returned 404 and the suggested replacement also returned 503.
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
 - Source-linked status checks retrieved citation provenance and explicit date presence, not arbitrary semantic support. Inspect the original source for important conclusions.
 - Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
+- Hosted models can still return quota errors, HTTP 500, or exceed the answer time budget. Retries are bounded and errors are sanitized; the local Gemma default remains the most consistent model in the latest fictional three-question exercise. See [the test plan](docs/TEST_PLAN.md) for observed results.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.
 - Missing-cache `.xlsx`/`.xlsm` formulas are flagged; calculation remains out of scope.
 - Legacy `.xls` formulas expose only their stored result through `xlrd`; formula expressions are not available. An absent cached result is never calculated. Password-protected `.xls` files cannot be read.

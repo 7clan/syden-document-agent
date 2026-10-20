@@ -221,7 +221,7 @@ class ProviderRateLimitError(RuntimeError):
     def __init__(self, provider: str, seconds: float | None):
         self.status_code = 429
         self.safe_code = "rate_limit"
-        label = {"groq": "Groq", "openai": "OpenAI", "ollama_cloud": "Ollama Cloud",
+        label = {"groq": "Groq", "gemini": "Gemini", "openai": "OpenAI", "ollama_cloud": "Ollama Cloud",
                  "compatible": "Model provider"}.get(provider, "Model provider")
         suffix = (f" Please retry in approximately {math.ceil(seconds)} seconds."
                   if seconds is not None and math.isfinite(seconds) else
@@ -263,6 +263,8 @@ def provider_error_diagnostic(exc: Exception) -> dict[str, Any]:
         raw_code = "timeout"
     if not raw_code and type(exc).__name__ == "APIConnectionError":
         raw_code = "connection_error"
+    if not raw_code and isinstance(status, int) and status >= 500:
+        raw_code = "server_error"
     if isinstance(raw_code, str):
         raw_code = raw_code.lower()
     code = (raw_code if isinstance(raw_code, str)
@@ -343,14 +345,16 @@ def _retry_after_seconds(exc: Exception) -> float | None:
 
 
 def _rate_limited_create(create: Callable[..., Any], request: dict[str, Any],
-                         provider: str, deadline: float) -> Any:
+                         provider: str, deadline: float,
+                         *, retry_server_errors: bool = True) -> Any:
     """Bound retries for rate limits and transient Ollama Cloud server errors."""
     for attempt in range(2):
         try:
             return create(**request)
         except Exception as exc:
             status = getattr(exc, "status_code", None)
-            if (provider == "ollama_cloud" and status in {500, 502, 503, 504}
+            if (provider == "ollama_cloud" and retry_server_errors
+                    and status in {500, 502, 503, 504}
                     and attempt == 0 and time.monotonic() + 0.5 < deadline):
                 time.sleep(0.5)
                 continue
@@ -1582,7 +1586,12 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
     if not model.strip():
         raise ValueError("A Gemini model ID is required.")
     system_instruction = _system_prompt(model)
-    client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=30000))
+    # Bound the SDK's own transient-error retries. A depleted account quota
+    # cannot be repaired by submitting the same large prompt repeatedly.
+    client = genai.Client(api_key=key, http_options=types.HttpOptions(
+        timeout=30000, retry_options=types.HttpRetryOptions(
+            attempts=2, initial_delay=1, max_delay=2,
+            http_status_codes=[429, 503, 504])))
 
     funcs = [types.FunctionDeclaration(name=t["name"], description=t["description"],
                                         parameters_json_schema=t["parameters"]) for t in TOOL_SCHEMAS]
@@ -1618,6 +1627,10 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 exc._syden_phase = phase
             except (AttributeError, TypeError):
                 pass
+            if getattr(exc, "code", None) == 429:
+                limited = ProviderRateLimitError("gemini", _retry_after_seconds(exc))
+                limited.request_phase = phase
+                raise limited from None
             raise
 
     def compact_final(reason: str) -> str:
@@ -1649,6 +1662,13 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
 
     for _ in range(max_rounds):
         if time.monotonic() >= deadline:
+            if tool_calls and (_needs_numeric_query(question) or _needs_dates_query(question)):
+                tool_calls.append({"name": "provider_budget_deterministic_completion",
+                                   "ok": True, "origin": "application",
+                                   "reason": "Provider time budget reached after document tools"})
+                return _source_linked_answer(conn, "", citations, tool_calls,
+                                             question, numeric_args,
+                                             _has_dates_result(tool_calls))
             return Answer("Provider time budget reached; narrow the question and retry.",
                           [], tool_calls)
         response = send_gemini(contents=contents, config=config, phase="tool")
@@ -1854,7 +1874,8 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
 
     key, model, base_url = _compatible_config(provider, model_override=model_override)
     system_instruction = _system_prompt(model)
-    client = OpenAI(api_key=key, timeout=30.0, max_retries=0,
+    ollama_gpt = provider == "ollama_cloud" and model.casefold().startswith("gpt-oss:")
+    client = OpenAI(api_key=key, timeout=45.0 if ollama_gpt else 30.0, max_retries=0,
                     **({"base_url": base_url} if base_url else {}))
 
     schemas = [{"type": "function", "function": {"name": t["name"],
@@ -1874,23 +1895,67 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     table_context = ""
     native_schema = provider == "openai"
     parse_recovered = False
+    transient_recovered = False
     cache: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
     sent_evidence: set[tuple[str, str]] = set()
     handoff_chars = 0
     stalled = 0
-    deadline = time.monotonic() + 75
+    deadline = time.monotonic() + (100 if ollama_gpt else 75)
 
     def send(request: dict[str, Any], phase: str) -> Any:
-        nonlocal parse_recovered
+        nonlocal parse_recovered, transient_recovered
         try:
             return _rate_limited_create(client.chat.completions.create,
-                                        request, provider, deadline)
+                                        request, provider, deadline,
+                                        retry_server_errors=not ollama_gpt)
         except Exception as exc:
             try:
                 exc._syden_phase = phase
             except (AttributeError, TypeError):
                 pass
+            status = getattr(exc, "status_code", None)
+            transient = (status in {500, 502, 503, 504}
+                         or type(exc).__name__ == "APITimeoutError")
+            if (ollama_gpt and transient and not transient_recovered
+                    and time.monotonic() + 2 < deadline):
+                transient_recovered = True
+                precise = [cite for cite in _verified_sources(conn, citations)
+                           if not cite.endswith(" | document")]
+                need_numeric = _needs_numeric_query(question) and not _has_numeric_result(trace)
+                need_dates = _needs_dates_query(question) and not _has_dates_result(trace)
+                retry_as_tool = phase == "tool" and (need_numeric or need_dates or not precise)
+                compact = _compact_recovery_messages(conn, question, citations,
+                                                     system_instruction)
+                if retry_as_tool:
+                    compact.append({"role": "user", "content":
+                                    "Call a document tool to retrieve the required evidence."})
+                    recovery = {"model": model, "messages": compact, "tools": schemas,
+                                "tool_choice": "auto", "temperature": 0}
+                else:
+                    compact.append({"role": "user", "content":
+                                    "Answer with JSON using only the indexed evidence above. "
+                                    "Cite exact retrieved locations."})
+                    recovery = {"model": model, "messages": compact,
+                                "tool_choice": "none", "temperature": 0}
+                trace.append({"name": "provider_transient_recovery", "ok": True,
+                              "origin": "application", "phase": phase,
+                              "mode": "tool" if retry_as_tool else "final",
+                              "http_status": status if isinstance(status, int) else None,
+                              "code": "timeout" if status is None else "server_error",
+                              "visible_chars": sum(len(str(item.get("content", "")))
+                                                   for item in compact)})
+                time.sleep(1)
+                try:
+                    return _rate_limited_create(client.chat.completions.create,
+                                                recovery, provider, deadline,
+                                                retry_server_errors=False)
+                except Exception as retry_exc:
+                    try:
+                        retry_exc._syden_phase = "tool" if retry_as_tool else "final"
+                    except (AttributeError, TypeError):
+                        pass
+                    raise
             if provider != "groq" or not _output_parse_failed(exc):
                 raise
             if parse_recovered:
@@ -2027,6 +2092,15 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 args = {}
                 result, repeated = {"error": "Malformed tool arguments JSON"}, False
             else:
+                if (provider == "groq" and model.startswith("openai/gpt-oss-")
+                        and call.function.name == "list_documents"
+                        and args == {"": ""}):
+                    # This no-argument tool has one unambiguous safe repair.
+                    # Preserve an audit record of what the model actually sent.
+                    trace.append({"name": "tool_argument_repair", "ok": True,
+                                  "origin": "application", "tool": "list_documents",
+                                  "original_args": args, "normalized_args": {}})
+                    args = {}
                 result, repeated = _cached_tool(conn, call.function.name, args, cache)
             all_repeated &= repeated
             if call.function.name == "query_spreadsheet" and "error" not in result:

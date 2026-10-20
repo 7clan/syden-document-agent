@@ -532,3 +532,31 @@ for non-Gemma models; Gemma's prompt remains byte-for-byte unchanged. No
 provider-specific instruction was added based on one malformed tool call or
 service outages. Full local answer/evidence JSON is ignored under
 `.local/interview_ladder_results/`; no keys or generated documents are committed.
+
+## Fresh provider reliability exercise (2026-10-20)
+
+After adding provider-specific recovery, a different fictional five-file folder
+was generated under ignored `.local/provider_reliability_20261020`. Three new
+interview questions covered signed scope and exclusions, strict BOQ filtering
+across separate sheets, and a cross-document approval/deadline/value decision.
+The source files independently establish two SAR items above one million
+(WP-11/E9 SAR 1,490,000; WP-12/E10 SAR 1,200,000), totaling SAR 2,690,000;
+WP-13/E11 is exactly one million and excluded.
+
+Gemma answered all three correctly against the source files. Ollama GPT-OSS
+20B answered BOQ and the cross-document decision correctly; its first scope
+attempt returned HTTP 500, then a retest answered correctly. A sanitized
+request-shape probe showed that identical tool schemas can succeed, so the
+HTTP 500 remains an intermittent provider/model risk. Groq GPT-OSS 20B
+answered scope correctly, then reached a 429 quota delay of about 815 seconds;
+one later retry still showed about 318 seconds remaining. Gemini 2.5 Flash
+returned 429 on scope and again after a cooldown. Gemini 3.5 Flash Lite answered scope
+correctly and, after a time-budget numeric completion fix, returned the exact
+BOQ cells and sum; its cross-document question exceeded the time budget with
+no answer. These provider failures were not counted as factual answer passes.
+
+The full local suite passed **270 tests, 1 skipped** with
+`python -m pytest -q --basetemp .local/pytest_provider_release`; Ruff passed.
+Detailed local answers, actual tool traces, and original indexed evidence are
+in `.local/provider_reliability_results/RESULTS.md` and sibling JSON files.
+The generated documents and raw results are ignored by Git.
