@@ -434,7 +434,7 @@ def _question_date_context(conn: sqlite3.Connection, question: str,
 
 def _cross_document_amount_question(question: str) -> bool:
     lower = question.casefold()
-    return bool(re.search(r"\b(?:boq|spreadsheet|workbook)\b", lower)
+    return bool(re.search(r"\b(?:boq|spreadsheet|workbook|subtotal)\b", lower)
                 and re.search(r"\bcontract\b", lower)
                 and re.search(r"\b(?:subtotal|sum|total|amount|value|equal|compare)\b", lower))
 
@@ -507,7 +507,8 @@ def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
     if (not _cross_document_amount_question(question)
             or not re.search(r"(?i)\b(?:equal|same)\b", question)):
         return None
-    if re.search(r"(?i)\b(?:revised|updated|amended|post-change)\b", question):
+    if (re.search(r"(?i)\b(?:revised|updated|amended|post-change)\b", question)
+            and not re.search(r"(?i)\boriginal\b", question)):
         return None
     sheets = conn.execute(
         "SELECT d.path,r.sheet FROM sheet_rows r JOIN documents d ON d.id=r.document_id "
@@ -578,9 +579,41 @@ def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
             f"totals {currency} {amount}. The original contract value is "
             f"{currency} {contract_sum}. These values "
             f"{'are equal' if same else 'are not equal'}.")
-    return Answer(text, _verified_sources(conn, [*cells, *contract_matches]), trace,
-                  {"boq_subtotal": str(amount), "contract_value": str(contract_sum),
-                   "currency": currency, "boq_sheet": sheet}, "evidence_linked")
+    structured = {"boq_subtotal": str(amount), "contract_value": str(contract_sum),
+                  "currency": currency, "boq_sheet": sheet}
+    sources = [*cells, *contract_matches]
+    if re.search(r"(?i)\brevised\b", question):
+        increase_pattern = re.compile(
+            r"(?i)\b(?:price\s+)?increase\b[^.!?\n]{0,60}?\b"
+            r"(SAR|AED|USD|EUR|GBP)\s*([\d,]+(?:\.\d+)?)")
+        revised_pattern = re.compile(
+            r"(?i)\brevised\s+contract\s+(?:sum|value|amount)\b"
+            r"[^.!?\n]{0,60}?\b(SAR|AED|USD|EUR|GBP)\s*([\d,]+(?:\.\d+)?)")
+        changes = []
+        for hit in search_documents(conn, "revised contract sum", limit=12).get("results", []):
+            citation = hit["citation"]
+            evidence = get_evidence(conn, citation)
+            original = evidence.get("text", "")
+            increase = increase_pattern.search(original)
+            revised = revised_pattern.search(original)
+            if not increase or not revised or " | page " not in citation:
+                continue
+            if increase.group(1).upper() != currency or revised.group(1).upper() != currency:
+                continue
+            delta = Decimal(increase.group(2).replace(",", ""))
+            updated = Decimal(revised.group(2).replace(",", ""))
+            if contract_sum + delta == updated:
+                changes.append((delta, updated, citation))
+        if changes and len({(delta, updated) for delta, updated, _ in changes}) == 1:
+            delta, updated, citation = changes[0]
+            text += (f" A retrieved change passage states a {currency} {delta} increase "
+                     f"and a revised contract sum of {currency} {updated}; "
+                     f"{contract_sum} + {delta} = {updated}.")
+            sources.append(citation)
+            structured.update({"price_increase": str(delta), "revised_contract_sum": str(updated)})
+        else:
+            text += " The requested revised amount could not be independently checked."
+    return Answer(text, _verified_sources(conn, sources), trace, structured, "evidence_linked")
 
 
 def _matching_sheet_context(conn: sqlite3.Connection, question: str
@@ -995,6 +1028,10 @@ def _verified_numeric_answer(conn: sqlite3.Connection, question: str,
                              args: dict[str, Any], trace: list[dict[str, Any]]) -> Answer:
     verified_args = _question_filter(question, args)
     item_match = re.search(r"(?i)\b(?:line\s+)?item\s+([\w.-]+)\b", question)
+    # A generic phrase such as "cost item strictly above" has no item identifier.
+    # Only enter the single-item path for a code containing a digit.
+    if item_match and not any(char.isdigit() for char in item_match.group(1)):
+        item_match = None
     if item_match and verified_args.get("operator") in {"gt", "gte", "lt", "lte", "eq"}:
         identifier = item_match.group(1)
         item_args = {**verified_args, "operator": "all", "value": 0,

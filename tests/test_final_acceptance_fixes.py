@@ -13,6 +13,7 @@ from syden_agent.agent import (
     _financial_comparison_context,
     _matching_sheet_context,
     _source_linked_answer,
+    _verified_numeric_answer,
 )
 from syden_agent.db import connect
 
@@ -86,6 +87,33 @@ def test_original_value_comparator_does_not_answer_revised_sum_question():
     assert _checked_financial_comparison(
         _financial_index(), "Does the BOQ subtotal equal the revised contract sum?",
         [{"name": "list_documents", "ok": True}]) is None
+
+
+def test_original_comparison_with_revised_amount_checks_all_operands():
+    conn = _financial_index()
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES(1,3,0,?)",
+                 (("Approved variation V3. Approved price increase: SAR 100,000. "
+                   "Revised contract sum: SAR 2,100,000."),))
+    answer = _checked_financial_comparison(
+        conn, "Does the selected-items subtotal equal the original contract sum? "
+              "Also give the V3 increase and revised contract sum.",
+        [{"name": "list_documents", "ok": True}])
+    assert answer is not None
+    assert answer.structured["boq_subtotal"] == "900000"
+    assert answer.structured["price_increase"] == "100000"
+    assert answer.structured["revised_contract_sum"] == "2100000"
+    assert "Terms.pdf | page 3 | chunk 0" in answer.sources
+
+
+def test_generic_cost_item_phrase_does_not_select_an_item_code():
+    conn = _financial_index()
+    answer = _verified_numeric_answer(
+        conn, "List every cost item strictly above SAR 250,000 in Costs.xlsx.",
+        {"file": "Costs.xlsx", "sheet": "Base Costs", "operator": "gt", "value": 250000},
+        [{"name": "query_spreadsheet", "ok": True}])
+    assert answer.verification_status == "deterministically_verified"
+    assert answer.structured["total_matches"] == 2
+    assert answer.structured["matched_amount_sums"] == {"SAR": "900000"}
 
 
 def test_matching_sheet_context_includes_each_row_and_location():

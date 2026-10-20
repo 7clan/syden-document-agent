@@ -16,13 +16,14 @@ smoke tests; see the verification section below.
 - Store data in a local SQLite database and report per-file corruption/unsupported formats.
 - Six read-only tools: `list_documents`, `inspect_document`, `search_documents`, `query_spreadsheet`,
   `extract_dates`, `get_evidence`.
-- Gemini (default), OpenAI, Groq-hosted Llama, or Ollama Cloud tool-calling loop, with source citations and an audit trace.
+- Ollama Cloud (Gemma 4 31B by default), Gemini, OpenAI, or Groq tool-calling loop, with source citations and an audit trace.
 - Streamlit interface plus command-line invocation; offline `pytest` tests.
 
 ## Requirements
 
 - Python 3.11 or newer, VS Code (optional), internet access for a cloud LLM.
-- Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) **or** OpenAI API key.
+- Ollama Cloud API key for the default Gemma model, or a Gemini API key from
+  [Google AI Studio](https://aistudio.google.com/apikey), or an OpenAI API key.
   The Gemini free tier is limited and availability depends on account/model; see
   [official pricing](https://ai.google.dev/gemini-api/docs/pricing). Alternatively use a
   [Groq API key](https://console.groq.com/keys) for hosted Llama. Provider credentials are
@@ -38,9 +39,9 @@ smoke tests; see the verification section below.
 cd syden-document-agent-starter
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[openai,dev]"
 Copy-Item .env.example .env
-# Open .env and add a valid GEMINI_API_KEY, never commit it.
+# Open .env and add OLLAMA_API_KEY for the default Gemma model; never commit it.
 mkdir documents
 # Copy your TEST documents into documents/ (they will not be committed).
 syden-agent ingest "documents"
@@ -265,9 +266,9 @@ Copy `.env.example` to `.env` and fill only the provider you use. `LLM_PROVIDER`
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[openai,dev]'
 cp .env.example .env
-# Add GEMINI_API_KEY. Keep .env private.
+# Add OLLAMA_API_KEY for the default Gemma model. Keep .env private.
 mkdir -p documents
 syden-agent ingest documents
 syden-agent ask 'Summarize the scope of work in this contract'

@@ -161,6 +161,26 @@ def test_streamlit_catalog_cache_refresh_persistence_and_manual_warning(monkeypa
     assert next(button for button in page.button if button.label == "Ask agent").disabled
 
 
+def test_gemma_is_initial_ollama_selection_but_user_can_change_it(monkeypatch, tmp_path):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("SYDEN_DB_PATH", str(tmp_path / "gemma-default.db"))
+    monkeypatch.setenv("LLM_PROVIDER", "ollama_cloud")
+    monkeypatch.setenv("OLLAMA_MODEL", "gemma4:31b")
+    monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-ollama")
+    monkeypatch.setattr(model_catalog, "discover_models", lambda provider, key:
+                        model_catalog.ModelCatalog((
+                            model_catalog.ModelOption("gpt-oss:20b", "GPT-OSS 20B", True),
+                            model_catalog.ModelOption("gemma4:31b", "Gemma 4 31B", True))))
+    app = Path(__file__).resolve().parents[1] / "app.py"
+    page = AppTest.from_file(app, default_timeout=10).run()
+    assert page.sidebar.selectbox[0].value == "ollama_cloud"
+    assert page.sidebar.selectbox[1].value == "gemma4:31b"
+    page.sidebar.selectbox[1].set_value("gpt-oss:20b").run()
+    page.run()
+    assert page.sidebar.selectbox[1].value == "gpt-oss:20b"
+
+
 def test_streamlit_empty_live_catalog_reports_no_compatible_models(monkeypatch, tmp_path):
     from streamlit.testing.v1 import AppTest
 
@@ -203,7 +223,7 @@ def test_streamlit_model_listing_failure_shows_fallback_ids(monkeypatch, tmp_pat
     page = AppTest.from_file(app, default_timeout=10).run()
     page.sidebar.selectbox[0].set_value("ollama_cloud").run()
     assert not page.exception
-    assert page.sidebar.selectbox[1].value == "gpt-oss:20b"
+    assert page.sidebar.selectbox[1].value == "gemma4:31b"
     assert any("Model listing unavailable" in warning.value
                for warning in page.sidebar.warning)
     assert any("nemotron-3-ultra" in option

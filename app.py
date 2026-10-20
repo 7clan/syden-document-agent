@@ -38,7 +38,7 @@ conn = connect(os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
 PROVIDERS = {
     "gemini": ("Google Gemini", "GEMINI_API_KEY", "GEMINI_MODEL", "gemini-2.5-flash"),
     "groq": ("Groq", "GROQ_API_KEY", "GROQ_MODEL", "openai/gpt-oss-20b"),
-    "ollama_cloud": ("Ollama Cloud", "OLLAMA_API_KEY", "OLLAMA_MODEL", "gpt-oss:20b"),
+    "ollama_cloud": ("Ollama Cloud", "OLLAMA_API_KEY", "OLLAMA_MODEL", "gemma4:31b"),
     "openai": ("OpenAI", "OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4.1-mini"),
     "compatible": ("Other compatible API", "COMPATIBLE_API_KEY",
                    "COMPATIBLE_MODEL", ""),
@@ -47,7 +47,7 @@ CUSTOM_MODEL = "Other model ID (enter manually)"
 with st.sidebar:
     st.subheader("AI model")
     provider_ids = list(PROVIDERS)
-    configured_provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    configured_provider = os.getenv("LLM_PROVIDER", "ollama_cloud").strip().lower()
     provider = st.selectbox(
         "Provider", provider_ids,
         index=provider_ids.index(configured_provider) if configured_provider in provider_ids else 0,
@@ -87,8 +87,11 @@ with st.sidebar:
         model_options.append(previous_model)
         model_labels[previous_model] = f"Previously selected: {previous_model} (not listed)"
     model_options.append(CUSTOM_MODEL)
+    listed_models = {choice.id for choice in discovered.models} if discovered else set(model_options)
     default_model = (CUSTOM_MODEL if discovered and discovered.source == "live"
-                     and not discovered.models else model_options[0])
+                     and not discovered.models else
+                     configured_model if configured_model in listed_models else
+                     tested_model if tested_model in listed_models else model_options[0])
     model_choice = st.selectbox("Model", model_options, key=model_key,
                                 index=(model_options.index(previous_model)
                                        if previous_model in model_options else
