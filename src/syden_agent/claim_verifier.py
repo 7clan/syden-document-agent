@@ -122,13 +122,16 @@ def _spreadsheet_citation(citation: str) -> bool:
 
 
 def _row_conflict(conn: sqlite3.Connection, citation: str,
-                  row: dict[str, Any], statement: str) -> str | None:
+                  row: dict[str, Any], statement: str,
+                  group_identifiers: set[str] | None = None) -> str | None:
     """Check explicit workbook facts against one cited row, never adjacent rows."""
     values = [str(value) for value in row.values() if value is not None]
     source = " ".join(values)
     claim_ids = _identifiers(statement)
     row_ids = _identifiers(source)
-    if claim_ids and not claim_ids <= row_ids:
+    if group_identifiers and not group_identifiers & row_ids:
+        return "Cited spreadsheet row does not contain a claimed identifier"
+    if claim_ids and not group_identifiers and not claim_ids <= row_ids:
         return "Identifier belongs to a different spreadsheet row"
     claim_dates, rest = _date_values(statement)
     source_dates, source_rest = _date_values(source)
@@ -470,6 +473,7 @@ def _resolve_supports(conn: sqlite3.Connection, claim: str, supports: list[Any],
     citations: list[str] = []
     excerpts: list[dict[str, Any]] = []
     full_sources: list[str] = []
+    structured_rows: list[tuple[str, dict[str, Any], str]] = []
     for support in supports:
         if not isinstance(support, dict):
             return citations, excerpts, full_sources, "Malformed source reference"
@@ -488,11 +492,7 @@ def _resolve_supports(conn: sqlite3.Connection, claim: str, supports: list[Any],
             row = evidence.get("row")
             if not isinstance(row, dict):
                 return citations, excerpts, full_sources, "Cited spreadsheet row is missing"
-            # The model may combine separate cells in natural prose. Authenticate
-            # its explicit facts, then construct the audit excerpt from indexed cells.
-            for statement in (claim, quote) if quote else (claim,):
-                if conflict := _row_conflict(conn, citation, row, statement):
-                    return citations, excerpts, full_sources, conflict
+            structured_rows.append((citation, row, quote))
             citations.append(citation)
             full_sources.append(source)
             excerpts.append({"citation": citation, "quote": source,
@@ -508,6 +508,23 @@ def _resolve_supports(conn: sqlite3.Connection, claim: str, supports: list[Any],
         full_sources.append(source)
         excerpts.append({"citation": citation, "quote": source[start:end],
                          "start": start, "end": end})
+    claim_ids = _identifiers(claim)
+    grouped = (len(claim_ids) > 1 and len(structured_rows) > 1
+               and len(structured_rows) == len(supports))
+    if grouped:
+        covered = set().union(*(_identifiers(_evidence_text({"row": row}))
+                                for _, row, _ in structured_rows))
+        if not claim_ids <= covered:
+            return citations, excerpts, full_sources, "Claimed identifier is absent from cited rows"
+    for citation, row, quote in structured_rows:
+        # Each claimed ID must have its own cited row. Shared properties such as
+        # "contractual" are checked on every row; dates and amounts must also
+        # agree with every row unless the model splits them into atomic claims.
+        if conflict := _row_conflict(conn, citation, row, claim,
+                                     claim_ids if grouped else None):
+            return citations, excerpts, full_sources, conflict
+        if quote and (conflict := _row_conflict(conn, citation, row, quote)):
+            return citations, excerpts, full_sources, conflict
     return citations, excerpts, full_sources, ""
 
 

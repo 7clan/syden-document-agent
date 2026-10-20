@@ -121,6 +121,10 @@ excerpt comes from indexed cells, and these interpretations remain
 span. Spreadsheet inspection previews include copyable row citations.
 `query_spreadsheet` searches financial BOQ amounts; zero matches there do not
 mean a milestone schedule is empty.
+When one claim names several spreadsheet records, each named identifier must
+have a cited row. Shared properties are checked against every cited row;
+different per-record dates or amounts are best stated as separate claims.
+This local check cannot prove an arbitrary interpretation of a row.
 
 Each claim identifies the numbered part of the question it answers. A filename
 constrains that part, while another part can use evidence from another file.
@@ -274,7 +278,7 @@ After the scoped provenance correction on 2026-10-20, the local suite passed
 **184 tests with 1 skipped**, and Ruff passed. The tested live scenarios and
 the remaining provider limits are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 After the structured Excel and provider-context fix on 2026-10-20, the local
-suite passed **202 tests with 1 skipped**, and Ruff passed. A live Gemini
+suite passed **203 tests with 1 skipped**, and Ruff passed. A live Gemini
 five-milestone schedule query returned five correctly cited, evidence-linked
 claims; the latest Groq synthetic smoke run did not meet its strict success
 criterion because one unsupported extra claim was omitted.

@@ -191,3 +191,22 @@ command reported `success: false` because the model added an unsupported
 tool-action claim. It was omitted from the final answer, so this is not a
 passing provider smoke test. No live 429 occurred on this attempt. Model
 availability and rate limits remain provider and account dependent.
+
+## Grouped milestone regression (2026-10-20)
+
+The Streamlit Groq result for “Which milestones are contractual and which are
+unapproved planning dates?” omitted two otherwise cited grouped claims. The
+verifier required every row to contain every ID in a multi-row list. The
+regression now checks that each claimed ID is covered by its own cited row and
+that a shared property agrees with every row. Missing rows, wrong-status rows,
+and swapped per-record dates are rejected. Against the indexed synthetic
+`05_Project_Schedule.xlsx`, the exact two grouped claims are now retained as
+**evidence-linked**, with row 2–6 citations. This is an offline validation of
+the displayed claims, not a successful new live Groq answer.
+
+One live Groq retest returned HTTP 429 with an 11-second suggested wait. A
+single retry after that wait returned another 429 with a 21-second wait. The
+application showed friendly rate-limit messages instead of raw API errors.
+No further provider calls were made; live Groq answer quality after this fix
+remains unverified. No new semantic-verification model request or new class of
+wording rules was added.

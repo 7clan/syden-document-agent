@@ -124,3 +124,42 @@ def test_word_quotes_still_require_real_contiguous_source_text():
     citation = "Terms.docx | paragraph 1"
     assert _check(conn, "The client approved the handover plan.", citation,
                   "The client rejected the handover plan.")["status"] == "unverified"
+
+
+def test_grouped_milestone_claims_bind_ids_to_their_own_cited_rows():
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(id,path,kind,status) "
+                 "VALUES(1,'Project Schedule.xlsx','xlsx','ready')")
+    rows = [
+        ["ID", "Activity", "Date", "Classification", "Approval"],
+        ["M-01", "Drawings", "2026-11-20", "Contractual deadline", "Approved"],
+        ["M-02", "Factory report", "2026-12-10", "Contractual deadline", "Approved"],
+        ["M-03", "Handover", "2027-03-31", "Contractual completion", "Approved"],
+        ["M-04", "Cable tray inspection", "2026-11-30", "Planning target only", "Not contractual"],
+        ["M-05", "Alternative completion", "2027-04-05", "Proposal only", "Not approved"],
+    ]
+    for number, values in enumerate(rows, 1):
+        cells = {chr(65 + index): {"value": value} for index, value in enumerate(values)}
+        conn.execute("INSERT INTO sheet_rows(document_id,sheet,row_num,cells_json) "
+                     "VALUES(1,'Milestones',?,?)", (number, json.dumps(cells)))
+
+    def cites(*numbers):
+        return [f"Project Schedule.xlsx | Milestones | row {number}" for number in numbers]
+
+    def grouped(text, citations):
+        raw = json.dumps({"answer": text, "insufficient": False, "claims": [
+            {"text": text, "supports": [{"citation": cite, "quote": ""}
+                                         for cite in citations]}]})
+        return validate_claims(conn, raw, citations)
+
+    accepted = grouped("The contractual milestones are M-01, M-02 and M-03.", cites(2, 3, 4))
+    assert accepted["status"] == "evidence_linked"
+    assert accepted["sources"] == cites(2, 3, 4)
+    assert grouped("The unapproved planning dates are M-04 and M-05.",
+                   cites(5, 6))["status"] == "evidence_linked"
+    assert grouped("The contractual milestones are M-01, M-02 and M-03.",
+                   cites(2, 3, 5))["status"] == "unverified"
+    assert grouped("The contractual milestones are M-01, M-02 and M-03.",
+                   cites(2, 3))["status"] == "unverified"
+    assert grouped("M-01 is due 2026-12-10 and M-02 is due 2026-11-20.",
+                   cites(2, 3))["status"] == "unverified"
