@@ -245,7 +245,7 @@ def test_malformed_compatible_json_gets_one_generation_retry(monkeypatch):
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-only")
     monkeypatch.setenv("OLLAMA_MODEL", "mock-model")
     answer = _ask_openai(conn, "What is the fictional code?", 4, provider="ollama_cloud")
-    assert answer.verification_status == "deterministically_verified"
+    assert answer.verification_status == "evidence_linked"
     assert len(calls) == 3
     assert calls[-1]["tool_choice"] == "none"
     assert any(item["name"] == "format_retry" for item in answer.tool_calls)

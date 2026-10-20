@@ -210,3 +210,32 @@ application showed friendly rate-limit messages instead of raw API errors.
 No further provider calls were made; live Groq answer quality after this fix
 remains unverified. No new semantic-verification model request or new class of
 wording rules was added.
+
+## Unseen Sable corpus and active verifier removal (2026-10-20)
+
+Four newly generated fictional documents were indexed in an isolated, ignored
+`.local/unseen_sable_20261020_v1/documents` folder: a two-page contract PDF, a
+change-notice PDF, an XLSX BOQ with row-4 and repeated headers, and a legacy XLS
+gate register. All four indexed successfully. The independent BOQ query found
+EL-41 and EL-42 at `Sable_BOQ.xlsx | Base Prices!E5` and `!E6`, strictly above
+SAR 1,000,000, totaling SAR 2,350,000. The SAR 1,000,000 boundary row was excluded.
+
+Before removing active claim checks, Gemini answered the PDF scope/date and BOQ
+questions correctly. It also answered a two-PDF contract/change question
+correctly. Gemini and Groq both retrieved the right legacy XLS rows and gave
+the right two dates, but the verifier omitted their combined-date claim because
+each cited row contained only one date. This was a false rejection on new data.
+Groq's first PDF run exhausted six tool rounds; its BOQ attempts returned one
+HTTP 400 `output_parse_failed` and one HTTP 429. Those were separate provider
+failures, not verifier rejections.
+
+The live provider path now displays model claims with retrieved citations and
+original indexed text/cells. It no longer calls `validate_claims` or checks
+model prose against row values. On retest, both Gemini and Groq gave complete,
+correct XLS gate/date answers with row 4 and row 5 citations. Groq also gave a
+complete, correct two-page PDF scope/exclusion/date answer. A final Groq BOQ
+attempt still returned HTTP 400 `output_parse_failed`; Groq financial live
+success is **not verified**. The deterministic BOQ result and Gemini BOQ run
+passed. These results are a small live sample, not a guarantee on arbitrary
+documents. Source-linked model claims can still be factually wrong even when
+their cited locations exist; the interface labels that distinction explicitly.

@@ -45,16 +45,13 @@ not project schedules; zero BOQ matches does not mean milestone rows are absent.
 Copy identifiers exactly as stored, including ASCII hyphens; do not substitute typographic punctuation.
 For a final prose answer, return ONLY a JSON object with keys answer (string),
 insufficient (boolean), and claims (array). Each claim has text (one factual
-statement) and supports (array of {citation, quote}). A nonempty quote must be
-an exact excerpt from cited tool evidence, allowing PDF line wrapping.
-Use only citations returned by tools in this conversation. Split claims so each
-has its own support. A support's quote may be an empty string when you cannot
-copy an exact excerpt: Python will resolve a local span from the cited source.
-For each claim set question_part to the zero-based question part it answers.
-Set insufficient=true when the evidence cannot answer.
-The answer field summarizes your conclusion; the application will display only
-claims that pass local provenance and comparable-fact checks. Do not make a
-corpus-wide absence or completeness claim from a few search results.
+statement) and supports (array of {citation}). Use only exact citations returned
+by tools in this conversation. Split different row dates and amounts into separate
+claims where practical. Set insufficient=true when the evidence cannot answer.
+The application displays your claims alongside the original indexed source text
+or cells. Python checks that cited locations were retrieved, but does not check
+whether your interpretation of the evidence is true. Do not make a corpus-wide
+absence or completeness claim from a few search results.
 Be concise, structured, and precise. Do not execute commands, access the network except the
 configured LLM provider, or change documents.
 """
@@ -68,14 +65,13 @@ ANSWER_SCHEMA = {
             "type": "object", "additionalProperties": False,
             "properties": {
                 "text": {"type": "string"},
-                "question_part": {"type": "integer"},
                 "supports": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False,
-                    "properties": {"citation": {"type": "string"}, "quote": {"type": "string"}},
-                    "required": ["citation", "quote"],
+                    "properties": {"citation": {"type": "string"}},
+                    "required": ["citation"],
                 }},
             },
-            "required": ["text", "question_part", "supports"],
+            "required": ["text", "supports"],
         }},
     },
     "required": ["answer", "insufficient", "claims"],
@@ -759,6 +755,102 @@ def _omit_unverified_completeness(text: str) -> tuple[str, list[str]]:
     return filtered.strip(), [item.strip() for item in omitted]
 
 
+def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[str],
+                          trace: list[dict[str, Any]], question: str = "",
+                          numeric_args: dict[str, Any] | None = None,
+                          date_called: bool = False) -> Answer:
+    """Show model claims and original sources without judging their meaning."""
+    if not trace:
+        return Answer("The model did not call a document tool; no grounded answer is available.",
+                      [], trace)
+    if _needs_numeric_query(question):
+        if numeric_args is None:
+            return Answer("A numerical BOQ tool result was not obtained; no numerical answer is available.",
+                          [], trace)
+        return _verified_numeric_answer(conn, question, numeric_args, trace)
+    if _needs_dates_query(question):
+        if not date_called:
+            return Answer("The date extraction tool was not called; no exhaustive date answer is available.",
+                          [], trace)
+        return _verified_dates_answer(conn, trace)
+
+    retrieved_list = _verified_sources(conn, citations)
+    retrieved = set(retrieved_list)
+    payload = parse_answer(text)
+    if payload is None:
+        return Answer(text.strip() or "The provider returned no answer text.",
+                      [cite for cite in retrieved_list if not cite.endswith(" | document")],
+                      [*trace, {"name": "source_linking", "ok": False,
+                                "reason": "No structured claim citations were available"}],
+                      verification_status="unverified")
+
+    rendered: list[str] = []
+    claims: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for entry in payload["claims"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("text"), str):
+            continue
+        statement = entry["text"].strip()[:1000]
+        if not statement:
+            continue
+        supports = entry.get("supports")
+        supports = supports[:8] if isinstance(supports, list) else []
+        local: list[dict[str, str]] = []
+        missing = False
+        for support in supports:
+            citation = support.get("citation") if isinstance(support, dict) else None
+            if (not isinstance(citation, str) or citation not in retrieved
+                    or citation.endswith(" | document")):
+                missing = True
+                continue
+            evidence = get_evidence(conn, citation)
+            if "row" in evidence:
+                original = " | ".join(f"{col}: {value}" for col, value in
+                                      evidence["row"].items() if value is not None)
+            else:
+                original = str(evidence.get("text", ""))
+            if not original:
+                missing = True
+                continue
+            if citation not in [item["citation"] for item in local]:
+                local.append({"citation": citation, "quote": original[:1000]})
+                sources.append(citation)
+        status = "evidence_linked" if local and not missing else "unverified"
+        reason = ("Retrieved source; model interpretation was not checked" if
+                  status == "evidence_linked" else
+                  "A cited source was not retrieved or had no indexed passage")
+        claims.append({"text": statement, "status": status,
+                       "sources": [item["citation"] for item in local],
+                       "quotes": local, "reason": reason})
+        reference = ", ".join(item["citation"] for item in local)
+        rendered.append((f"- {statement} — {reference}" +
+                         (" *(another source reference unavailable)*" if missing else ""))
+                        if reference else
+                        f"- {statement} *(source reference unavailable)*")
+
+    result_text = "\n".join(rendered) if rendered else payload["answer"].strip()
+    if payload["insufficient"]:
+        result_text += "\n\nThe model reported insufficient evidence."
+    latest: dict[str, dict[str, Any]] = {}
+    for call in trace:
+        if call.get("name") in TOOLS:
+            latest[call["name"]] = call
+    exhaustive = bool(re.search(r"(?i)\b(?:all|every|complete|entire|exhaustive)\b",
+                                question))
+    issues = [name for name, call in latest.items()
+              if not call.get("ok", True) or call.get("incomplete")
+              or (exhaustive and call.get("truncated"))]
+    if issues:
+        result_text += "\n\nRetrieval may be incomplete: " + ", ".join(issues) + "."
+    linked = bool(claims) and all(item["status"] == "evidence_linked" for item in claims)
+    status = "evidence_linked" if linked and not payload["insufficient"] and not issues else "unverified"
+    audit = {"name": "source_linking", "ok": linked,
+             "reason": "Citations checked; model claims were not fact-checked"}
+    return Answer(result_text or "The provider returned no answer text.",
+                  list(dict.fromkeys(sources)), [*trace, audit],
+                  verification_status=status, claims=claims)
+
+
 def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                   trace: list[dict[str, Any]], question: str = "",
                   numeric_args: dict[str, Any] | None = None,
@@ -989,9 +1081,8 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(
                     text="Call extract_dates before answering the date question.")]))
                 continue
-            return _final_answer(conn, text, citations, tool_calls, question, numeric_args,
-                                 _has_dates_result(tool_calls), provider="gemini",
-                                 structured_mode=True)
+            return _source_linked_answer(conn, text, citations, tool_calls, question,
+                                         numeric_args, _has_dates_result(tool_calls))
         if not response.candidates or response.candidates[0].content is None:
             return Answer("Provider returned tool calls without usable message content.",
                           _verified_sources(conn,citations), tool_calls)
@@ -1126,13 +1217,12 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                 messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content":
                                  "Return the answer as syntactically valid JSON only, with "
-                                 "answer, insufficient, and claims. Each claim needs text, "
-                                 "question_part, and supports with citation and quote. "
+                                 "answer, insufficient, and claims. Each claim needs text "
+                                 "and supports with exact retrieved citations. "
                                  "Use only tool evidence already retrieved. Do not add facts."})
                 continue
-            return _final_answer(conn, text, citations, trace, question, numeric_args,
-                                 _has_dates_result(trace), provider=provider,
-                                 structured_mode=True)
+            return _source_linked_answer(conn, text, citations, trace, question,
+                                         numeric_args, _has_dates_result(trace))
         messages.append(msg.model_dump(exclude_none=True))
         all_repeated = True
         for call in msg.tool_calls:

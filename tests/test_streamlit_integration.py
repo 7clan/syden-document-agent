@@ -65,5 +65,6 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     )
     page.run()
     assert not page.exception
-    assert any("Evidence-linked interpretation" in item.value for item in page.caption)
+    assert any("AI answer with checked source references" in item.value
+               for item in page.caption)
     conn.close()

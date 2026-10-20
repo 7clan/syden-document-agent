@@ -101,78 +101,49 @@ Both actions require a separate confirmation checkbox and button. After a
 successful action, the index is refreshed automatically. Files with the same
 basename but different extensions are managed independently.
 
-### General-purpose evidence verification
+### Source-linked AI answers
 
-The tool-calling model returns a JSON answer with individual claims and source
-citations. A support may contain an exact quote or an empty quote. Python
-resolves the citation against the local index, authenticates a supplied quote,
-or selects a local source span when the quote is empty. Claim audit records
-include the indexed excerpt and character offsets. Python checks explicit
-numbers, dates, currencies, identifiers, and directly comparable conflicting
-facts. These checks establish provenance and detect some errors; they cannot
-prove arbitrary natural-language interpretations.
+The live Gemini, Groq, Ollama Cloud and OpenAI paths return model-written claims with
+source citations. Python checks that each cited location was actually retrieved and
+still exists in the local index. The interface shows the model's wording beside the
+original PDF/Word text or Excel cells. Model-supplied quotations are ignored; displayed
+source text comes from the index.
 
-For Excel rows, Python reads the original structured cells. The model may
-describe several columns in a different word order; its prose is checked
-against the cited row's identifiers, dates, numbers, approval and
-classification values instead of being treated as a verbatim quote. The audit
-excerpt comes from indexed cells, and these interpretations remain
-**evidence-linked**. PDF and Word quotes still require an authentic local text
-span. Spreadsheet inspection previews include copyable row citations.
-`query_spreadsheet` searches financial BOQ amounts; zero matches there do not
-mean a milestone schedule is empty.
-When one claim names several spreadsheet records, each named identifier must
-have a cited row. Shared properties are checked against every cited row;
-different per-record dates or amounts are best stated as separate claims.
-This local check cannot prove an arbitrary interpretation of a row.
+The active path **does not run the old claim verifier**. It does not compare model
+prose, dates or status words against cited rows, so correct grouped Excel answers
+are no longer removed by per-row semantic checks. A valid citation establishes
+provenance, not factual correctness: a model can still misunderstand a passage or
+associate a short cell value with the wrong row. Such answers are labeled **AI answer
+with checked source references; facts not verified**. An invalid or unobserved
+citation is flagged, and its model claim remains visible as **unverified** so the
+user can inspect the problem. Malformed model output is also unverified.
 
-Each claim identifies the numbered part of the question it answers. A filename
-constrains that part, while another part can use evidence from another file.
-For a singular ambiguous request such as “the contract” when multiple contract
-files are indexed, the app asks for a filename. Cross-workbook BOQ answers show
-per-file subtotals and exact cells; currencies are never converted or mixed.
-The displayed answer is assembled from the claims that pass these checks;
-unsupported claims are omitted and counted. Malformed JSON falls back to
-retrieved source excerpts, clearly labeled unverified.
+Financial BOQ filtering, strict thresholds and totals still come from Python's
+read-only `query_spreadsheet` tool. Its exact source cells and arithmetic are
+checked independently and labeled **deterministically calculated** when coverage
+is complete. Candidate date extraction likewise remains a tool result; nearby
+text does not automatically prove a contractual obligation.
 
-For example, a final prose response has this shape (the `answer` field is
-recorded but the UI renders the individually checked claims):
+The model still calls read-only document tools before answering. Repeated calls
+are cached and bounded. A provider may receive one formatting retry for malformed
+JSON, but there is no second model request just to judge the answer. The legacy
+`claim_verifier.py` and `semantic_verifier.py` remain for older offline regression
+experiments; neither filters claims in the live provider path. For ambiguous
+requests such as "the contract" when multiple contracts are indexed, name the
+file. Cross-workbook BOQ sums remain separated by file and currency.
+
+A structured response now needs only a claim and retrieved citation:
 
 ```json
 {"answer":"Four circuits passed; two need retesting.","insufficient":false,
- "claims":[{"text":"Four circuits passed.","question_part":0,"supports":[
-   {"citation":"Report.pdf | page 1 | chunk 0",
-    "quote":"Four circuits passed and two circuits require retesting."}]}]}
+ "claims":[{"text":"Four circuits passed.","supports":[
+   {"citation":"Report.pdf | page 1 | chunk 0"}]}]}
 ```
 
-The UI distinguishes **deterministically verified** exact source wording or
-Python BOQ calculations, **evidence-linked** paraphrases whose interpretation
-Python cannot prove, and **unverified** missing or contradictory support.
-An authentic quote does not make its interpretation true. Changed amounts and
-explicit conflicting decisions can be rejected, but a role reversal using the
-same words may still be evidence-linked and needs human review. Python marks
-only exact source wording and deterministic calculations as verified. A
-truncated search is a coverage warning for exhaustive questions; a successful
-retry clears an earlier tool error. Unreadable files remain visible as coverage
-limits. Repeated tool calls are cached and bounded. No second model call is
-made solely to verify a draft answer; a provider emitting invalid JSON may
-receive one format-only generation retry.
-Tool responses sent to models use compact previews while verification retains
-the full local index. Groq and other compatible providers retry one HTTP 429
-only when its `retry-after` delay fits the bounded request budget; otherwise
-the app displays a provider-specific wait message without the raw API error.
-
-OpenAI Chat Completions uses a strict JSON schema for the response. If that
-format is rejected by the chosen OpenAI model, the generation request is
-retried once with instructed JSON and the fallback appears in the audit trail.
-Gemini, Groq, Ollama Cloud and other compatible endpoints use the same instructed JSON
-contract with local schema and provenance checks; model support varies. The
-old `semantic_verifier.py` is retained for experimental tests and is not in the
-active provider request path.
-Ollama states that its cloud API currently lacks enforced structured outputs
-([official documentation](https://docs.ollama.com/capabilities/structured-outputs)).
-Malformed cloud JSON can therefore still occur; the app retries answer
-generation once, then shows indexed excerpts as unverified if parsing fails.
+Groq and other compatible providers retry one HTTP 429 only when its `retry-after`
+delay fits the bounded request budget; otherwise the app displays a wait message.
+Ollama Cloud may not enforce structured output, so its JSON formatting still
+needs live checking with the selected model.
 
 ### Choose a provider and model in Streamlit
 
@@ -282,6 +253,10 @@ suite passed **203 tests with 1 skipped**, and Ruff passed. A live Gemini
 five-milestone schedule query returned five correctly cited, evidence-linked
 claims; the latest Groq synthetic smoke run did not meet its strict success
 criterion because one unsupported extra claim was omitted.
+After removing claim interpretation checks from the active provider path on
+2026-10-20, the local suite passed **214 tests with 1 skipped** and Ruff passed.
+The new fictional PDF/XLS/XLSX live results, including a remaining Groq BOQ
+HTTP 400 parsing failure, are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
 ### Observed provider checks (2026-10-19)
 

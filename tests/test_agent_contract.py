@@ -112,7 +112,7 @@ def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkey
     answer = _ask_openai(conn, "What is the synthetic code?", 3)
     assert "Synthetic code ORCHID-7429" in answer.text
     assert answer.sources == ["smoke.pdf | page 1 | chunk 0"]
-    assert answer.verification_status == "deterministically_verified"
+    assert answer.verification_status == "evidence_linked"
     assert answer.tool_calls[0]["name"] == "search_documents"
     assert messages_seen[1][-1]["role"] == "tool"
     assert len(messages_seen) == 2  # No verification-only request.
@@ -163,11 +163,15 @@ def test_gemini_tool_loop_returns_structured_claim_without_verification_call(mon
     fake = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
     monkeypatch.setattr(genai, "Client", lambda **_kwargs: fake)
     monkeypatch.setenv("GEMINI_API_KEY", "test-only-not-real")
+    def legacy_verifier(*_args):
+        raise AssertionError("legacy verifier called")
+
+    monkeypatch.setattr("syden_agent.agent.validate_claims", legacy_verifier)
     answer = _ask_gemini(conn, "What is the synthetic code?", 3)
     assert answer.sources == [cite]
-    assert answer.verification_status == "deterministically_verified"
+    assert answer.verification_status == "evidence_linked"
     assert len(requests) == 2
-    assert answer.tool_calls[-1]["name"] == "claim_validation"
+    assert answer.tool_calls[-1]["name"] == "source_linking"
 
 
 def test_openai_unsupported_native_schema_retries_with_instructed_json(monkeypatch):
@@ -199,7 +203,7 @@ def test_openai_unsupported_native_schema_retries_with_instructed_json(monkeypat
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kw: fake))
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
     answer = _ask_openai(conn, "Was the test result accepted?", 3)
-    assert answer.verification_status == "deterministically_verified"
+    assert answer.verification_status == "evidence_linked"
     assert len(requests) == 3
     assert "response_format" not in requests[1]
     assert any(item["name"] == "structured_output_fallback" for item in answer.tool_calls)
