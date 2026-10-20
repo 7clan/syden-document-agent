@@ -500,3 +500,35 @@ the original location is inspectable, not that the claim is guaranteed true.
 After these changes, `python -m pytest -q` passed 259 tests with 1 skipped;
 `ruff check src tests app.py scripts` passed. The fresh CLI indexed all five
 files and independently returned CH-101/E6 and CH-102/E7 for strict SAR 1m.
+
+## Three-level interview ladder and optional prompt check (2026-10-20)
+
+A different fictional five-file folder was generated under ignored
+`.local/interview_ladder_20261020`: two PDFs, two XLSX workbooks, and one DOCX.
+The three questions increase in difficulty: (1) signed scope and exclusions,
+(2) a strict SAR 1 million BOQ threshold across a repeated header and separate
+currency/variation sheets, and (3) approved work, unapproved CCTV, unchanged
+handover, rejected proposed date, and original/revised contract values across
+multiple documents. Expected facts were read from the generated originals:
+96 Zone West detectors, four panels CP-9 to CP-12, FP-101/E7 SAR 1,200,000 and
+FP-102/E8 SAR 1,100,000 above threshold (sum SAR 2,300,000), FP-103/E9 at the
+excluded boundary, A4's 18 Zone East loops and SAR 280,000 increase, original
+SAR 3,450,000 and revised SAR 3,730,000, 30 November 2029 binding handover,
+and an unapproved 15 December proposal.
+
+| Model | Level 1 | Level 2 | Level 3 |
+| --- | --- | --- | --- |
+| Ollama Gemma 4 31B, unchanged prompt | Correct scope/exclusions with PDF citation | Correct 2 items, SAR 2,300,000, exact cells; deterministic status | Correct decisions and amounts with separate PDF/Word/Excel citations |
+| Ollama GPT-OSS 20B, extra prompt | HTTP 500 during tool phase; no answer | Correct deterministic result and cells | Final-phase timeout; no answer |
+| Groq GPT-OSS 20B, extra prompt | HTTP 429, about 688 s retry; no answer | HTTP 429, about 692 s retry; no answer | Facts and citations correct, but a malformed `list_documents` argument failed before successful search; overall status remained unverified |
+| Gemini 2.5 Flash, extra prompt | HTTP 429 `resource_exhausted`; no answer | Not attempted after limit | Not attempted after limit |
+
+On the previous six-file exercise, Groq's new-prompt approval answer correctly
+cited the variation and meeting decision; a later BOQ request hit HTTP 429.
+Gemini's approval request hit HTTP 429, and Ollama GPT-OSS 20B's approval
+request hit HTTP 500. These provider failures do not measure answer accuracy
+or prove the extra prompt improved it. A compact shared instruction was added
+for non-Gemma models; Gemma's prompt remains byte-for-byte unchanged. No
+provider-specific instruction was added based on one malformed tool call or
+service outages. Full local answer/evidence JSON is ignored under
+`.local/interview_ladder_results/`; no keys or generated documents are committed.

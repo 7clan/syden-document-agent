@@ -204,6 +204,14 @@ needs live checking with the selected model.
 
 ### Choose a provider and model in Streamlit
 
+Gemma 4 keeps the established system prompt. Other models receive one compact
+additional instruction to inspect original evidence, use deterministic numeric
+tools, keep approval and planning statuses distinct, and check each claim against
+its own cited passage or row. This does not add another model request or certify
+semantic correctness. Provider-specific prompt rules are added only when repeated
+live errors show they are needed; HTTP 429, HTTP 500, and timeouts are reported as
+provider failures rather than answer mistakes.
+
 The **AI model** section in the Streamlit sidebar has a **Provider** dropdown and a
 **Model** dropdown. You can switch between Gemini, Groq, Ollama Cloud, OpenAI, or a
 custom OpenAI Chat Completions-compatible service without restarting the app.

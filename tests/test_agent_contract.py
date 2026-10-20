@@ -4,13 +4,17 @@ import sys
 from types import SimpleNamespace
 
 from syden_agent.agent import (
+    NON_GEMMA_EVIDENCE_CHECK,
+    SYSTEM,
     _ask_gemini,
     _ask_openai,
     _collect_citations,
+    _compact_recovery_messages,
     _compatible_config,
     _execute,
     _final_answer,
     _needs_numeric_query,
+    _system_prompt,
 )
 from syden_agent.db import connect
 from syden_agent.tools import TOOL_SCHEMAS, _num
@@ -21,6 +25,19 @@ def test_document_tools_are_allowlisted():
     assert "error" in _execute(conn, "run_shell", {"command": "dir"})
     assert "documents" in _execute(conn, "list_documents", {})
     assert "error" in _execute(conn, "query_spreadsheet", {"operator": "DROP TABLE"})
+
+
+def test_extra_evidence_instruction_excludes_gemma_and_survives_compact_recovery():
+    assert _system_prompt("gemma4:31b") == SYSTEM
+    assert _system_prompt("gemma4:31b-cloud") == SYSTEM
+    for model in ("gemini-2.5-flash", "openai/gpt-oss-20b", "gpt-oss:120b", "gpt-4.1-mini"):
+        prompt = _system_prompt(model)
+        assert prompt == SYSTEM + NON_GEMMA_EVIDENCE_CHECK
+        assert "each claim's own cited passage" in prompt
+    conn = connect(":memory:")
+    recovered = _compact_recovery_messages(
+        conn, "What does this document say?", [], _system_prompt("openai/gpt-oss-20b"))
+    assert recovered[0]["content"] == SYSTEM + NON_GEMMA_EVIDENCE_CHECK
 
 
 def test_currency_numbers():
@@ -119,6 +136,7 @@ def test_compatible_provider_tool_loop_uses_real_dispatch_with_mocked_api(monkey
     assert "Synthetic code ORCHID-7429" in messages_seen[1][-1]["content"]
     assert len(messages_seen) == 2  # No verification-only request.
     assert requests_seen[0]["response_format"]["type"] == "json_schema"
+    assert requests_seen[0]["messages"][0]["content"] == _system_prompt("gpt-4.1-mini")
 
 
 def test_gemini_sdk_accepts_local_tool_declarations():
@@ -174,6 +192,7 @@ def test_gemini_tool_loop_returns_structured_claim_without_verification_call(mon
     assert answer.verification_status == "evidence_linked"
     assert len(requests) == 2
     assert answer.tool_calls[-1]["name"] == "source_linking"
+    assert requests[0]["config"].system_instruction == _system_prompt("gemini-2.5-flash")
 
 
 def test_gemini_tool_budget_still_generates_answer(monkeypatch):

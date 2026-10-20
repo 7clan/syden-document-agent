@@ -4,6 +4,8 @@ import sys
 from types import SimpleNamespace
 
 from syden_agent.agent import (
+    NON_GEMMA_EVIDENCE_CHECK,
+    SYSTEM,
     _ask_openai,
     _source_linked_answer,
     provider_error_diagnostic,
@@ -85,6 +87,8 @@ def test_identical_documents_reach_gemma_and_gpt_oss_without_get_evidence(monkey
                               if message.get("role") == "tool" and AMOUNT in message["content"])
     assert CITE in second_tool_result["content"]
     assert AMOUNT in str(gpt_requests[-1]["messages"])
+    assert gpt_requests[0]["messages"][0]["content"] == SYSTEM + NON_GEMMA_EVIDENCE_CHECK
+    assert gpt_requests[-1]["messages"][0]["content"] == SYSTEM + NON_GEMMA_EVIDENCE_CHECK
 
     gemma_requests = _client(monkeypatch, [searches[0],
                                           _tool("get_evidence", {"citation": CITE}),
@@ -96,6 +100,8 @@ def test_identical_documents_reach_gemma_and_gpt_oss_without_get_evidence(monkey
             {"search_documents", "get_evidence"}] == ["search_documents", "get_evidence"]
     assert AMOUNT in gemma_requests[1]["messages"][-1]["content"]
     assert AMOUNT in str(gemma_requests[-1]["messages"])
+    assert gemma_requests[0]["messages"][0]["content"] == SYSTEM
+    assert gemma_requests[-1]["messages"][0]["content"] == SYSTEM
 
 
 def test_persistent_false_absence_is_unverified_with_inspectable_candidates(monkeypatch):
