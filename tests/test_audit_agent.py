@@ -42,6 +42,35 @@ def test_numeric_intent_paraphrases_are_guarded():
     assert _question_filter("In 2026, which equipment exceeds SAR 1 million?", {})["value"] == 1_000_000
 
 
+def test_mixed_contract_values_are_not_replaced_by_boq_sum():
+    assert not _needs_numeric_query(
+        "How much is the CO-07 price increase, and what is the revised contract sum?"
+    )
+    assert not _needs_numeric_query(
+        "Does the selected-items BOQ subtotal equal the complete contract sum?"
+    )
+    assert _needs_numeric_query("Does item EL-103 exceed SAR 1,000,000?")
+
+
+def test_single_boq_item_below_threshold_reports_its_actual_value(tmp_path):
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Base BOQ"
+    sheet.append(["Item", "Total Amount", "Currency"])
+    sheet.append(["EL-103", 890_000, "SAR"])
+    book.save(tmp_path / "BOQ.xlsx")
+    conn = connect(tmp_path / "index.db")
+    assert ingest_folder(conn, tmp_path)["indexed"] == 1
+    answer = _final_answer(
+        conn, "", [], [{"name": "query_spreadsheet", "ok": True}],
+        "Does item EL-103 exceed SAR 1,000,000?",
+        {"operator": "gt", "value": 1_000_000, "currency": "SAR"},
+    )
+    assert answer.verification_status == "deterministically_verified"
+    assert answer.text.startswith("No. Item EL-103 is SAR 890000")
+    assert answer.sources == ["BOQ.xlsx | Base BOQ!B2"]
+
+
 def test_unrelated_real_citation_cannot_support_fabricated_budget():
     conn = connect(":memory:")
     conn.execute("INSERT INTO documents(path,kind,status) VALUES('contract.pdf','pdf','ready')")

@@ -726,6 +726,46 @@ def _question_filter(question: str, original: dict[str, Any]) -> dict[str, Any]:
 def _verified_numeric_answer(conn: sqlite3.Connection, question: str,
                              args: dict[str, Any], trace: list[dict[str, Any]]) -> Answer:
     verified_args = _question_filter(question, args)
+    item_match = re.search(r"(?i)\b(?:line\s+)?item\s+([\w.-]+)\b", question)
+    if item_match and verified_args.get("operator") in {"gt", "gte", "lt", "lte", "eq"}:
+        identifier = item_match.group(1)
+        item_args = {**verified_args, "operator": "all", "value": 0,
+                     "text_filter": identifier}
+        item_result = query_spreadsheet(conn, **item_args, limit=500)
+        if "error" in item_result:
+            return Answer(f"Numerical query could not be verified: {item_result['error']}",
+                          [], trace)
+        rows = [row for row in item_result["matches"] if any(
+            str(value).casefold() == identifier.casefold()
+            for value in row["values"].values())]
+        if not rows or item_result["has_more"]:
+            return Answer(f"A complete, exact BOQ amount for item {identifier} was not found.",
+                          [], trace, item_result, "unverified")
+        target = _num(verified_args["value"])
+        if target is None or not target.is_finite():
+            return Answer("The comparison amount is invalid.", [], trace)
+        comparisons = {"gt": lambda amount: amount > target,
+                       "gte": lambda amount: amount >= target,
+                       "lt": lambda amount: amount < target,
+                       "lte": lambda amount: amount <= target,
+                       "eq": lambda amount: amount == target}
+        lines = []
+        sources = []
+        for row in rows:
+            evidence = get_evidence(conn, row["citation"])
+            amount = Decimal(row["amount_exact"])
+            if (_num(evidence.get("value", {}).get("value")) != amount
+                    or evidence.get("row") != row["values"]):
+                return Answer("Numerical evidence failed source verification.", [], trace)
+            verdict = "Yes" if comparisons[verified_args["operator"]](amount) else "No"
+            lines.append(f"{verdict}. Item {identifier} is {row['currency']} {amount}; "
+                         f"comparison threshold: {row['currency']} {target} — "
+                         f"{row['citation']}")
+            sources.append(row["citation"])
+        item_result["verified_args"] = verified_args
+        return Answer("\n".join(lines), _verified_sources(conn, sources), trace,
+                      item_result, "evidence_linked" if item_result["incomplete"]
+                      else "deterministically_verified")
     result = query_spreadsheet(conn, **verified_args, limit=500)
     if "error" in result:
         return Answer(f"Numerical query could not be verified: {result['error']}", [], trace)
@@ -1128,11 +1168,16 @@ def _final_answer(conn: sqlite3.Connection, text: str, citations: list[str],
 
 
 def _needs_numeric_query(question: str) -> bool:
-    """Recognize common BOQ/cost questions without relying on a single wording."""
+    """Route spreadsheet item filters to deterministic calculation.
+
+    Contract values and comparisons across document types need their own
+    source passages; a sum of every indexed BOQ sheet cannot answer them.
+    """
     lower = question.lower()
+    if re.search(r"\bcontract\b", lower):
+        return False
     subject = re.search(r"\b(?:boqs?|spreadsheets?|cost items?|line items?|items?|equipment|"
-                        r"materials?|prices?|costs?)\b", lower) or re.search(
-                            r"\b(?:sar|aed|usd|eur|gbp)\b", lower)
+                        r"materials?)\b", lower)
     condition = re.search(r"\b(?:above|below|over|under|greater|less|exceeds?|costing|"
                           r"million|amount|sum|total|highest|largest|expensive|prices?)\b|[<>]",
                           lower)
