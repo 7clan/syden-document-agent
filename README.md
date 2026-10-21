@@ -152,8 +152,11 @@ For a BOQ-subtotal-versus-contract comparison, the application retrieves each
 worksheet total separately and an explicit original contract value from indexed
 PDF text. If one base worksheet and one contract value are unambiguous, Python
 compares those operands and cites the original amount cells and PDF passage.
-This answer is labeled **evidence-linked** because identifying the intended
-worksheet and contract clause still depends on document wording. If the operands
+When the same question also asks about an exact BOQ item threshold, Python checks
+that item against the selected worksheet row and answers both parts separately.
+This answer is categorized **evidence-linked** and the UI notes that Python
+checked the amounts while source selection still needs review, because identifying
+the intended worksheet and contract clause depends on document wording. If the operands
 cannot be selected reliably, the application does not label model arithmetic as
 deterministically verified. Small matching worksheets, such as milestone registers,
 are supplied with all their indexed rows when they fit the context budget; larger
@@ -178,9 +181,14 @@ support a claim. Deterministic numeric and date queries can still return their
 own checked source references.
 A question naming a specific date also gets a bounded, application-initiated lookup
 for indexed passages containing that date after the model's first document tool call.
+When a date question explicitly asks to distinguish planning or proposed dates,
+the same handoff includes bounded original rows or passages with those status terms.
 Its audit event is labeled `host_date_context`; it is not represented as a model
 function call. This improves cross-document evidence delivery without proving
 the model's interpretation of an approval decision.
+File-format inventory questions are counted directly from the local index after
+the model calls `list_documents`; document-level references support the file list,
+while factual claims still require passage or row citations.
 A provider may receive one formatting retry for malformed
 JSON, but there is no second model request just to judge the answer. The legacy
 `claim_verifier.py` and `semantic_verifier.py` remain for older offline regression

@@ -61,6 +61,28 @@ def test_pagination_and_strict_greater_than(tmp_path):
     conn.close()
 
 
+def test_summary_amounts_do_not_count_as_cost_items(tmp_path):
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Signed Base"
+    sheet.append(["Item", "Description", "Total Amount (SAR)"])
+    sheet.append(["A-1", "Drive package", 1_200_000])
+    sheet.append(["A-2", "Total replacement kit", 1_100_000])
+    sheet.append([None, "SELECTED ITEMS SUBTOTAL", 2_300_000])
+    sheet.append([None, "APPROVED INSTRUCTION TOTAL", 2_300_000])
+    book.save(tmp_path / "BOQ.xlsx")
+    conn = connect(tmp_path / "index.db")
+    ingest_folder(conn, tmp_path)
+    result = query_spreadsheet(conn, file="BOQ.xlsx", sheet="Signed Base",
+                               value=1_000_000, currency="SAR")
+    assert result["total_matches"] == 2
+    assert result["matched_amount_sum"] == "2300000"
+    assert [item["citation"] for item in result["matches"]] == [
+        "BOQ.xlsx | Signed Base!C2", "BOQ.xlsx | Signed Base!C3",
+    ]
+    conn.close()
+
+
 def test_empty_folder_and_corrupt_file(tmp_path):
     conn = connect(tmp_path / "db.sqlite")
     report = ingest_folder(conn, tmp_path / "missing")

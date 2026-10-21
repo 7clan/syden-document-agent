@@ -320,7 +320,15 @@ if "last_answer" in st.session_state:
     status_labels = {"deterministically_verified": "Deterministically calculated",
                      "evidence_linked": "AI answer with checked source references; facts not verified",
                      "unverified": "Unverified or insufficient"}
-    st.caption("Answer status: " + status_labels.get(answer.verification_status, "Unverified"))
+    inventory_answer = "document_inventory" in (answer.structured or {})
+    checked_comparison = (answer.verification_status == "evidence_linked"
+                          and "boq_subtotal" in (answer.structured or {})
+                          and "contract_value" in (answer.structured or {}))
+    status_label = ("Indexed file list checked locally" if inventory_answer else
+                    "Python-checked amounts; source selection needs review"
+                    if checked_comparison else
+                    status_labels.get(answer.verification_status, "Unverified"))
+    st.caption("Answer status: " + status_label)
     st.markdown(answer.text)
     st.subheader("Source references")
     candidate_sources = (answer.structured or {}).get("candidate_sources", [])
@@ -333,7 +341,12 @@ if "last_answer" in st.session_state:
             if control.button("Open source", key=f"source_{index}"):
                 st.session_state["open_source"] = source
         if not precise_sources:
-            st.info("Only document names were retrieved; no exact passage or row was cited.")
+            if inventory_answer:
+                st.caption("File names, formats, and counts come from the local index records.")
+                for source in answer.sources:
+                    st.code(source)
+            else:
+                st.info("Only document names were retrieved; no exact passage or row was cited.")
     else:
         st.info("No claim-supporting citations returned. Do not rely on unsupported claims.")
     if candidate_sources:

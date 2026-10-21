@@ -12,7 +12,7 @@ from typing import Any
 CURRENCIES = ("SAR", "AED", "USD", "EUR", "GBP")
 AMOUNT_WORDS = ("amount", "total", "extended", "line value", "price", "cost")
 UNIT_WORDS = ("unit price", "unit rate", "rate per", "quantity", "qty")
-SUMMARY_WORDS = ("subtotal", "sub-total", "grand total", "tax", "vat")
+SUMMARY_LABEL = re.compile(r"\b(?:sub[- ]?total|grand total|tax|vat)\b|(?:^|\s)total$")
 
 
 def _num(value: Any) -> Decimal | None:
@@ -248,7 +248,7 @@ def query_spreadsheet(
             return
         descriptions = [_label(item.get("value")) for col, item in row["cells"].items()
                         if col != selected.column]
-        if any(text.startswith(SUMMARY_WORDS) for text in descriptions):
+        if any(SUMMARY_LABEL.search(text) for text in descriptions):
             return
         valid = {"gt": amount > target, "gte": amount >= target, "lt": amount < target,
                  "lte": amount <= target, "eq": amount == target, "all": True}[operator]
