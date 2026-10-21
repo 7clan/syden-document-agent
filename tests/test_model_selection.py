@@ -63,6 +63,8 @@ def test_streamlit_selector_switches_provider_and_model(monkeypatch, tmp_path):
     db_file = tmp_path / "selector.db"
     connection = connect(db_file)
     connection.execute("INSERT INTO documents(path,kind,status) VALUES('Demo.pdf','pdf','ready')")
+    connection.execute("INSERT INTO metadata(key,value) VALUES('active_folder',?)",
+                       (str(tmp_path),))
     connection.commit()
     connection.close()
 
@@ -84,6 +86,8 @@ def test_streamlit_selector_switches_provider_and_model(monkeypatch, tmp_path):
     app = Path(__file__).resolve().parents[1] / "app.py"
     page = AppTest.from_file(app, default_timeout=10).run()
     assert not page.exception
+    next(field for field in page.sidebar.text_input
+         if field.label == "Folder path on this computer").set_value(str(tmp_path)).run()
 
     page.sidebar.selectbox[0].set_value("groq").run()
     assert not page.exception
@@ -236,6 +240,8 @@ def test_streamlit_never_shows_provider_failed_generation(monkeypatch, tmp_path)
     db_file = tmp_path / "safe-errors.db"
     connection = connect(db_file)
     connection.execute("INSERT INTO documents(path,kind,status) VALUES('Demo.pdf','pdf','ready')")
+    connection.execute("INSERT INTO metadata(key,value) VALUES('active_folder',?)",
+                       (str(tmp_path),))
     connection.commit()
     connection.close()
     monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
@@ -260,6 +266,8 @@ def test_streamlit_never_shows_provider_failed_generation(monkeypatch, tmp_path)
     monkeypatch.setattr(agent, "ask", fail)
     app = Path(__file__).resolve().parents[1] / "app.py"
     page = AppTest.from_file(app, default_timeout=10).run()
+    next(field for field in page.sidebar.text_input
+         if field.label == "Folder path on this computer").set_value(str(tmp_path)).run()
     page.sidebar.selectbox[0].set_value("groq").run()
     page.text_area[0].set_value("What does the document say?").run()
     next(button for button in page.button if button.label == "Ask agent").click().run()

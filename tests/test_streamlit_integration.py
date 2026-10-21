@@ -12,6 +12,44 @@ from syden_agent.db import connect
 from syden_agent.tools import extract_dates, query_spreadsheet
 
 
+def test_switching_folders_clears_answer_and_blocks_stale_index(tmp_path, monkeypatch):
+    old_folder = tmp_path / "interview"
+    demo_folder = tmp_path / "demo"
+    old_folder.mkdir()
+    demo_folder.mkdir()
+    db_path = tmp_path / "app.db"
+    conn = connect(db_path)
+    conn.execute("INSERT INTO documents(path,kind,status) VALUES('Old.pdf','pdf','ready')")
+    conn.execute("INSERT INTO metadata(key,value) VALUES('active_folder',?)",
+                 (str(old_folder),))
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("SYDEN_DB_PATH", str(db_path))
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-not-a-real-key")
+    app = Path(__file__).resolve().parents[1] / "app.py"
+    page = AppTest.from_file(app, default_timeout=10).run()
+    folder_field = next(field for field in page.sidebar.text_input
+                        if field.label == "Folder path on this computer")
+    folder_field.set_value(str(old_folder)).run()
+    page.text_area[0].set_value("What is in this folder?").run()
+    assert not next(button for button in page.button
+                    if button.label == "Ask agent").disabled
+    page.session_state["last_answer"] = Answer("Old answer", ["Old.pdf | document"], [])
+    page.run()
+    next(field for field in page.sidebar.text_input
+         if field.label == "Folder path on this computer").set_value(str(demo_folder)).run()
+    assert not page.exception
+    assert "last_answer" not in page.session_state
+    assert next(button for button in page.button if button.label == "Ask agent").disabled
+    assert any("isn't the active index" in item.value for item in page.sidebar.info)
+    next(button for button in page.sidebar.button
+         if button.label == "Index folder").click().run()
+    assert not page.exception
+    assert not next(button for button in page.button
+                    if button.label == "Ask agent").disabled
+
+
 def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     book = Workbook()
     sheet = book.active

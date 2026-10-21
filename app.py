@@ -133,6 +133,12 @@ with st.sidebar:
     st.subheader("Document folder")
     default_folder = ".local/demo_documents" if Path(".local/demo_documents").is_dir() else "documents"
     folder = st.text_input("Folder path on this computer", default_folder)
+    target_folder = Path(folder).expanduser().resolve()
+    if st.session_state.get("_selected_folder") != str(target_folder):
+        st.session_state.pop("last_answer", None)
+        st.session_state.pop("open_source", None)
+        st.session_state.pop("csv_export", None)
+        st.session_state["_selected_folder"] = str(target_folder)
     if st.button("Index folder", type="primary", use_container_width=True):
         with st.spinner("Reading documents..."):
             st.session_state["index_report"] = ingest_folder(conn, folder)
@@ -147,7 +153,6 @@ with st.sidebar:
         accept_multiple_files=True,
         key=f"document_upload_{revision}",
     )
-    target_folder = Path(folder).expanduser().resolve()
     collisions = [selected.name for selected in selected_files
                   if (target_folder / selected.name).is_file()]
     replace_names: set[str] = set()
@@ -295,7 +300,8 @@ question = st.text_area("Ask a question about the indexed documents",
                         placeholder="List all total cost items above SAR 1 million across the BOQs")
 st.caption("Questions are independent: include the filename, threshold, or item selection "
            "instead of referring to 'those items' from an earlier answer.")
-if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask,
+if st.button("Ask agent", disabled=not question.strip() or not ready_to_ask or
+             not folder_is_indexed,
              type="primary"):
     with st.spinner("Analyzing evidence..."):
         try:

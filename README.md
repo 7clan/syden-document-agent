@@ -90,6 +90,16 @@ not indexed). This is more readable than the expandable JSON diagnostics.
 Selecting files through the browser upload saves them to disk and **automatically
 runs indexing** without pressing the Index folder button.
 
+On a fresh app session, the folder field defaults to `.local/demo_documents` when
+that directory exists. Interview test documents and their result JSON and SQLite
+files under other `.local` directories are separate and are not scanned. If the
+app database was last used with a different folder, click **Index folder** once
+for the selected demo folder before asking. The Ask button stays disabled until
+the selected folder is the active index, so an earlier interview corpus cannot
+silently answer a demo question. `SYDEN_DB_PATH` controls the app's SQLite index;
+test runners may create separate per-test databases. These indexes can be rebuilt
+from the original documents.
+
 Open **Remove or delete a document**, choose an exact filename, then select:
 
 - **Remove from AI (keep an archived copy):** Move the file to a sibling folder
