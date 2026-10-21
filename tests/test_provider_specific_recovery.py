@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from syden_agent.agent import (
+    OLLAMA_GPT_OSS_20B_TOOLS,
     ProviderRateLimitError,
     _ask_gemini,
     _ask_openai,
@@ -63,6 +64,18 @@ def test_server_error_diagnostic_is_specific_and_sanitized():
     error._syden_phase = "tool"
     assert provider_error_diagnostic(error) == {
         "http_status": 500, "code": "server_error", "phase": "tool"}
+
+
+def test_ollama_gpt_oss_20b_request_receives_tool_reminder(monkeypatch):
+    conn = _index()
+    requests = _client(monkeypatch, [
+        _tool("search_documents", '{"query":"ARBOR-17"}'), _final(),
+    ])
+    answer = _ask_openai(conn, "What is the code?", 3, provider="ollama_cloud",
+                         model_override="gpt-oss:20b")
+    assert answer.sources == [CITE]
+    assert OLLAMA_GPT_OSS_20B_TOOLS in requests[0]["messages"][0]["content"]
+    assert OLLAMA_GPT_OSS_20B_TOOLS in requests[1]["messages"][0]["content"]
 
 
 def test_ollama_gpt_server_error_retries_once_with_compact_evidence(monkeypatch):

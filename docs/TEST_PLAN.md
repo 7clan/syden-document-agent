@@ -613,3 +613,31 @@ bounded external retries. The full source files, displayed answers, tool calls,
 and retrieved originals are saved only under ignored
 `.local/final_interview_3_results/RESULTS.md` and sibling JSON files. This was
 not a browser test or a reliability estimate for unfamiliar employer documents.
+
+## Focused Ollama GPT-OSS 20B prompt retest (2026-10-21)
+
+The same seven files and three questions were rerun with Ollama Cloud
+`gpt-oss:20b`. Before the new prompt, scope omitted the contract deliverable
+dates; the BOQ result was correct; the harder answer falsely said the original
+SAR 8,240,000 contract sum was unavailable, and one retry returned no answer.
+
+A compact, model-specific instruction now names the six permitted document
+functions and asks the model to retrieve each source before claiming absence.
+It adds 98 words to each Ollama GPT-OSS 20B request, with no extra LLM request.
+Gemma and other provider prompts are unchanged. An intermediate live run
+skipped `query_spreadsheet`; the broad application fallback incorrectly
+included an unapproved quote. The fallback now abstains when multiple indexed
+tables make its scope ambiguous, instead of labeling that total verified.
+
+| Final prompt phase | Observed result |
+| --- | --- |
+| Contract scope | Correct signed scope, exclusions, three dated deliverables and original sum; citations include contract pages 1–2. |
+| Strict SAR BOQ threshold | Called `query_spreadsheet` on `Signed Base`; correct two cells and SAR 3,000,000 total. |
+| Cross-document decision | Correct change quantity, price, both contract sums, deadline and proposal status; omitted the requested C-04/C-05 retest and final-acceptance status. Partial answer. |
+
+The two completed prose answers were source-linked, not semantically
+guaranteed. The final run had no invented tool names, but one three-question
+sample cannot establish that the prompt prevents future tool errors or
+omissions. The ignored local JSON audits are named
+`*_ollama_cloud_gpt-oss_20b_tighter_prompt_v2.json` in
+`.local/final_interview_3_results/`. No browser interaction was performed.

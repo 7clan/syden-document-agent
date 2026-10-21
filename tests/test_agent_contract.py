@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from syden_agent.agent import (
     NON_GEMMA_EVIDENCE_CHECK,
+    OLLAMA_GPT_OSS_20B_TOOLS,
     SYSTEM,
     _ask_gemini,
     _ask_openai,
@@ -17,7 +18,7 @@ from syden_agent.agent import (
     _system_prompt,
 )
 from syden_agent.db import connect
-from syden_agent.tools import TOOL_SCHEMAS, _num
+from syden_agent.tools import TOOL_SCHEMAS, TOOLS, _num
 
 
 def test_document_tools_are_allowlisted():
@@ -38,6 +39,17 @@ def test_extra_evidence_instruction_excludes_gemma_and_survives_compact_recovery
     recovered = _compact_recovery_messages(
         conn, "What does this document say?", [], _system_prompt("openai/gpt-oss-20b"))
     assert recovered[0]["content"] == SYSTEM + NON_GEMMA_EVIDENCE_CHECK
+
+
+def test_ollama_gpt_oss_20b_tool_reminder_is_scoped_and_compact():
+    base = SYSTEM + NON_GEMMA_EVIDENCE_CHECK
+    for model in ("gpt-oss:20b", "gpt-oss:20b-cloud"):
+        assert _system_prompt(model, "ollama_cloud") == base + OLLAMA_GPT_OSS_20B_TOOLS
+    assert _system_prompt("gpt-oss:120b", "ollama_cloud") == base
+    assert _system_prompt("openai/gpt-oss-20b", "groq") == base
+    assert _system_prompt("gemma4:31b", "ollama_cloud") == SYSTEM
+    assert all(name in OLLAMA_GPT_OSS_20B_TOOLS for name in TOOLS)
+    assert len(OLLAMA_GPT_OSS_20B_TOOLS.split()) < 100
 
 
 def test_currency_numbers():

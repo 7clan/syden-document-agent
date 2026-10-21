@@ -354,6 +354,7 @@ limitations are documented in [the test plan](docs/TEST_PLAN.md).
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
 - Source-linked status checks retrieved citation provenance and explicit date presence, not arbitrary semantic support. Inspect the original source for important conclusions.
 - A model can cite a real BOQ row while incorrectly describing it as a clause of a named contract; the final fictional test observed this scope error with Gemini. Review which document establishes each interpretation.
+- Ollama GPT-OSS 20B received a compact tool-name reminder; in a follow-up fictional test it still omitted the inspection part of a cross-document answer. If a model skips a numerical tool while multiple tables are indexed, the application now abstains instead of verifying a broad fallback total. See [the test plan](docs/TEST_PLAN.md).
 - Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
 - Hosted models can still return quota errors, HTTP 400/500, or exceed the answer time budget. Retries are bounded and errors are sanitized; Gemma remained the most consistent default in the latest fictional three-question exercise. See [the test plan](docs/TEST_PLAN.md) for observed results.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.

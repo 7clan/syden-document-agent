@@ -189,6 +189,31 @@ def test_gemini_numeric_fallback_does_not_repeat_provider_requests(monkeypatch):
     assert answer.tool_calls[-1]["name"] == "host_numeric_fallback"
 
 
+def test_numeric_fallback_abstains_when_multiple_tables_need_scope():
+    conn = _financial_index()
+    answer = _source_linked_answer(
+        conn, "", [], [{"name": "list_documents", "ok": True}],
+        "List signed Base Costs items above SAR 50,000; exclude approved variation.")
+    assert answer.verification_status == "unverified"
+    assert not answer.sources
+    assert "no total is reported" in answer.text
+    assert answer.tool_calls[-1]["name"] == "host_numeric_fallback"
+    assert answer.tool_calls[-1]["ok"] is False
+
+
+def test_numeric_fallback_still_checks_single_table():
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO documents(id,path,kind,status) "
+                 "VALUES(1,'Costs.xlsx','xlsx','ready')")
+    _row(conn, 1, "Base", 1, ["Item Code", "Amount (SAR)"])
+    _row(conn, 1, "Base", 2, ["A-01", 1_250_000])
+    answer = _source_linked_answer(
+        conn, "", [], [{"name": "list_documents", "ok": True}],
+        "List all BOQ cost items above SAR 1 million.")
+    assert answer.verification_status == "deterministically_verified"
+    assert answer.sources == ["Costs.xlsx | Base!B2"]
+
+
 def test_gemini_empty_tool_budget_answer_gets_one_compact_json_recovery(monkeypatch):
     conn = connect(":memory:")
     conn.execute("INSERT INTO documents(id,path,kind,status) "
