@@ -1,12 +1,12 @@
-# SYDEN Document Agent — working starter
+# SYDEN Document Agent
 
 A source-aware AI document assistant for project contracts and Bills of Quantities (BOQs).
-**This is an evolving assessment implementation, not a benchmarked submission.** It indexes text PDFs,
-Excel workbooks and Word documents, implements deterministic read-only tools, and has provider adapters for
-Gemini, OpenAI, Groq, and Ollama Cloud. Three configured models passed live synthetic tool-call
-smoke tests; see the verification section below.
+It indexes text PDFs, Excel workbooks and Word documents, implements deterministic
+read-only tools, and has provider adapters for Gemini, OpenAI, Groq, and Ollama Cloud.
+Live tests used fictional documents; results and limitations are described below.
+Source-linked model prose still needs human review.
 
-## Features provided in the starter
+## Features
 
 - Index a local folder of PDF, `.xlsx`, `.xlsm`, legacy `.xls`, and `.docx` files; nested directories supported.
 - Extract text by PDF page or Word paragraph/table row, and spreadsheet rows by exact workbook/sheet/cell metadata.
@@ -26,7 +26,7 @@ smoke tests; see the verification section below.
   [Google AI Studio](https://aistudio.google.com/apikey), or an OpenAI API key.
   The Gemini free tier is limited and availability depends on account/model; see
   [official pricing](https://ai.google.dev/gemini-api/docs/pricing). Alternatively use a
-  [Groq API key](https://console.groq.com/keys) for hosted Llama. Provider credentials are
+  [Groq API key](https://console.groq.com/keys) for an account-accessible compatible model. Provider credentials are
   separate from any ChatGPT/Codex subscription.
 - **Privacy:** Google warns that data from the free tier may be used to improve their products;
   do not send real confidential employer documents to a free-tier model without permission.
@@ -35,14 +35,14 @@ smoke tests; see the verification section below.
 ## Quick start — Windows PowerShell
 
 ```powershell
-# unzip the starter and open its root directory in VS Code
-cd syden-document-agent-starter
+git clone https://github.com/7clan/syden-document-agent.git
+cd syden-document-agent
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[openai,dev]"
 Copy-Item .env.example .env
 # Open .env and add OLLAMA_API_KEY for the default Gemma model; never commit it.
-mkdir documents
+New-Item -ItemType Directory -Force documents | Out-Null
 # Copy your TEST documents into documents/ (they will not be committed).
 syden-agent ingest "documents"
 syden-agent list
@@ -62,7 +62,7 @@ new multi-file chooser beneath it to add downloaded files without moving them yo
    or keep `.local/demo_documents` to add to the demonstration corpus.
 2. Click **Choose PDF, Excel, or Word files**, select one or many files from Downloads
    (Ctrl-click or Shift-click in the Windows file picker), and confirm with **Open**.
-3. Click **Open** in the file picker. The app automatically saves the selected files into
+3. The app automatically saves the selected files into
    that folder, indexes them, and lists them under **Indexed files**; no second button is needed.
 4. Ask the agent questions normally; no file path is required in the question.
 
@@ -300,6 +300,8 @@ SQLite: documents + PDF passages/BOQ rows + Word blocks + Excel rows
 ```
 
 The architecture is deliberately small enough to explain and extend live.
+For a file-by-file code tour and a short demo sequence, use the
+[interview guide](docs/INTERVIEW_GUIDE.md).
 For full implementation requirements and hardening priorities, see **`PROMPT_FOR_CODEX.md`**.
 
 ## Run offline checks
@@ -314,77 +316,34 @@ these unit tests. Run `syden-agent smoke --provider gemini`, `--provider groq`, 
 `--provider ollama_cloud` with your own key before relying on the model in a demo.
 `success: true` requires an actual provider tool call, a verified source, and the exact
 synthetic answer. The smoke command does not read your indexed documents.
-In a clean Windows virtual environment, the editable install completed and all 55
-offline tests and Ruff checks passed on 2026-10-19. The three configured provider
-smoke tests also passed on synthetic text after the audit fixes.
-After the evidence-first refactor on 2026-10-20, the local suite passed 159
-tests with 1 skipped, and Ruff passed. The pull request's GitHub Actions result
-should be checked separately.
-After the scoped provenance correction on 2026-10-20, the local suite passed
-**184 tests with 1 skipped**, and Ruff passed. The tested live scenarios and
-the remaining provider limits are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
-After the structured Excel and provider-context fix on 2026-10-20, the local
-suite passed **203 tests with 1 skipped**, and Ruff passed. A live Gemini
-five-milestone schedule query returned five correctly cited, evidence-linked
-claims; the latest Groq synthetic smoke run did not meet its strict success
-criterion because one unsupported extra claim was omitted.
-After removing claim interpretation checks from the active provider path on
-2026-10-20, the local suite passed **214 tests with 1 skipped** and Ruff passed.
-The new fictional PDF/XLS/XLSX live results, including a remaining Groq BOQ
-HTTP 400 parsing failure, are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
-After the source inspector and final-answer tool-budget fix on 2026-10-20, the
-local suite passed **219 tests with 1 skipped** and Ruff passed. A live
-`gemini-3.5-flash-lite` retest answered the five-milestone demo question with
-schedule rows 2–6. An Ollama Cloud retest returned HTTP 500, and a second
-attempt returned empty answer content; its live result remains unconfirmed.
-After Groq parse-error handling and model discovery, the local test results are
-recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md). The live Groq date query
-completed with citations; the next Groq call hit a provider 429, so the contract
-and BOQ questions were checked separately without claiming live Groq success.
-The discovered Ollama direct API ID `gpt-oss:20b` passed a synthetic
-`search_documents` tool-call smoke check; other listed Ollama models have not
-been checked for live tool-call reliability.
-The later identical-document Gemma 4 31B, Ollama GPT-OSS 120B, and Groq GPT-OSS
-120B checks are recorded in [docs/TEST_PLAN.md](docs/TEST_PLAN.md). They are a
-small synthetic sample; the reported Ollama false absence and Groq HTTP 400 did
-not recur on those checks.
-The focused six-document acceptance fixes passed **251 tests with 1 skipped** and
-Ruff locally. Gemini and Ollama Cloud answered the three focused questions
-correctly against the original sources; Groq returned HTTP 429 before a focused
-answer. A separate four-document fictional held-out evaluation is recorded in
-[docs/TEST_PLAN.md](docs/TEST_PLAN.md). Passing those samples does not guarantee
-accuracy on arbitrary documents; evidence-linked answers still need source review.
-After a later, harder five-file fictional exercise, the local suite passed
-**253 tests with 1 skipped** and Ruff passed. Ollama answered the three exact
-brief examples after the currency and date fallback fixes. A cross-document
-answer cited the wrong PDF for one correct fact, and some Gemini/Ollama requests
-failed before answering;
-see [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for the observed results.
-The final pass used a new five-file fictional interview folder and the isolated
-six-file assessment folder. Ollama Gemma 4 31B answered all three original
-assessment-style questions on the new folder with source locations; Gemini 2.5
-Flash passed its available scope and BOQ checks, and Groq GPT-OSS 20B passed
-scope and a cross-document approval check. Other live calls hit provider 429,
-504, or read timeouts. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for the exact
-matrix; these results do not establish reliability on arbitrary employer files.
-The final offline suite passed **259 tests with 1 skipped**, and Ruff passed.
+The final local suite on 21 October 2026 passed **272 tests with 1 skipped**;
+Ruff passed. [GitHub Actions](https://github.com/7clan/syden-document-agent/actions/workflows/ci.yml)
+runs the same gate on repository updates; check its latest run before a demo.
+Earlier test history and individual regression scenarios remain in
+[docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
-### Observed provider checks (2026-10-19)
+### Live interview-style provider results (21 October 2026)
 
-| Provider/model | Synthetic tool-call smoke | Full BOQ question |
-| --- | --- | --- |
-| Gemini `gemini-2.5-flash` | Passed; called `search_documents` and `get_evidence` | Correct two rows and cell citations |
-| Groq `openai/gpt-oss-20b` | Passed; called `search_documents` | Correct numeric tool results and amounts; model used typographic hyphens in item codes |
-| Ollama Cloud `gpt-oss:20b-cloud` | Passed; called `search_documents` | Correct numeric tool results after a guarded retry; model used typographic hyphens in item codes |
+A new, previously unused folder of seven fictional files (three PDFs, three
+Excel workbooks and one Word document) was tested through the production
+`ask()` path. The three phases
+covered signed scope and deliverables, a strict SAR BOQ threshold, then a
+cross-document change-order, deadline, and inspection decision. The original
+files were read independently to assess the displayed answers. These are
+small synthetic samples, not estimates of accuracy on employer documents.
 
-This Groq key lists no Llama chat model. `llama-3.3-70b-versatile` and
-`llama-3.1-8b-instant` both returned 404, so Groq-hosted Llama support remains
-untested with this account. The OpenAI provider has not been live-tested because
-no OpenAI API key was supplied. These checks used only generated demo documents.
-After the 2026-10-20 claim refactor, synthetic Groq and Ollama Cloud smoke
-checks returned structured, source-linked claims. Gemini could not be confirmed
-at that time: its configured model returned 503 (high demand), while an old
-Lite model returned 404 and the suggested replacement also returned 503.
+| Provider and model | Contract scope | BOQ above SAR 1 million | Cross-document decision |
+| --- | --- | --- | --- |
+| Ollama Cloud `gemma4:31b` | All requested contract facts; also listed extra BOQ quantities | Correct: two cells, SAR 3,000,000 total | Correct with separate PDF, Word and Excel sources |
+| Gemini `gemini-2.5-flash` | Contract facts present, but also described BOQ-only items as contract scope | Correct deterministic result | HTTP 429 on first call and one retry; no answer |
+| Groq `openai/gpt-oss-20b` | Initial HTTP 400 final JSON; retry returned the requested facts plus extra BOQ quantities | Correct deterministic result; Python completed it after a provider limit | HTTP 429 on first call and one retry; no answer |
+
+Every source citation in a completed answer resolved to indexed text or cells.
+The BOQ was calculated in Python; an evidence-linked prose label does not prove
+that the model interpreted scope correctly. The local synthetic documents and
+full JSON audits are Git-ignored. OpenAI and Groq-hosted Llama were not live
+checked with this account. The earlier live exercises and their observed
+limitations are documented in [the test plan](docs/TEST_PLAN.md).
 
 ## Current limitations
 
@@ -394,8 +353,9 @@ Lite model returned 404 and the suggested replacement also returned 503.
 - Complex merged Excel headings and unusual BOQ layouts still need human inspection of the selected column and warnings.
 - Date extraction identifies candidate dates and nearby actions; an action is not automatically a verified contractual deadline.
 - Source-linked status checks retrieved citation provenance and explicit date presence, not arbitrary semantic support. Inspect the original source for important conclusions.
+- A model can cite a real BOQ row while incorrectly describing it as a clause of a named contract; the final fictional test observed this scope error with Gemini. Review which document establishes each interpretation.
 - Groq-hosted Llama specifically and OpenAI have not been live-tested with accessible models/keys. Groq GPT-OSS has been tested.
-- Hosted models can still return quota errors, HTTP 500, or exceed the answer time budget. Retries are bounded and errors are sanitized; the local Gemma default remains the most consistent model in the latest fictional three-question exercise. See [the test plan](docs/TEST_PLAN.md) for observed results.
+- Hosted models can still return quota errors, HTTP 400/500, or exceed the answer time budget. Retries are bounded and errors are sanitized; Gemma remained the most consistent default in the latest fictional three-question exercise. See [the test plan](docs/TEST_PLAN.md) for observed results.
 - The UI provides paginated BOQ/date results and BOQ CSV export, but preparing very large exports can be slow.
 - Missing-cache `.xlsx`/`.xlsm` formulas are flagged; calculation remains out of scope.
 - Legacy `.xls` formulas expose only their stored result through `xlrd`; formula expressions are not available. An absent cached result is never calculated. Password-protected `.xls` files cannot be read.
@@ -419,8 +379,9 @@ against independent acceptance fixtures.
 The original brief scores delivery time, readable code/documentation and live accuracy on unseen
 documents. The candidate must provide a GitHub repository and approximately half a page describing
 actual coding-agent usage, actual hours spent, decisions and improvements with more time.
-The current, still-in-progress note is [docs/DEVELOPMENT_NOTE.md](docs/DEVELOPMENT_NOTE.md).
-Update the estimated time before submission.
+The [development note](docs/DEVELOPMENT_NOTE.md) records OpenAI Codex use,
+design decisions, limitations and the candidate's approximately 11-hour
+estimate of active involvement. This is an estimate, not a time-tracking log.
 
 ## Credentials and source-only archive
 
@@ -447,25 +408,11 @@ offline test. Inspect the archive yourself before sharing it; this command does 
 - [xlrd legacy Excel reader](https://xlrd.readthedocs.io/en/latest/)
 - [python-docx document order](https://python-docx.readthedocs.io/en/latest/api/document.html)
 
-## Publish to GitHub (when ready)
+## Repository and submission
 
-The active GitHub repository is [7clan/syden-document-agent](https://github.com/7clan/syden-document-agent).
-Review the code and keep documents and credentials out of commits. Create an empty GitHub repository
-named `syden-document-agent` at https://github.com/new (choose visibility appropriately and do
-not initialize it with a second README), then run in the extracted project directory:
-
-```powershell
-git init
-git add .
-git commit -m "Initialize source-grounded document agent"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/syden-document-agent.git
-git push -u origin main
-```
-
-If GitHub CLI is installed and authenticated, you may instead use
-`gh repo create syden-document-agent --private --source=. --remote=origin --push`
-(after `git init`, `git add .`, and `git commit`).
-
-Before submission: document an actual model-assisted test run, complete the half-page note,
-verify README setup on a clean machine, and make the GitHub repo accessible to the reviewers.
+The project is already published at [7clan/syden-document-agent](https://github.com/7clan/syden-document-agent),
+with the current application on `main`. The previous `main` commit was preserved
+on `archive/main-before-evidence-first-2026-10-21`. The source-only archive
+above is optional; the GitHub repository and the development note are the
+assessment deliverables. Keep credentials and generated document databases out
+of anything shared with reviewers.

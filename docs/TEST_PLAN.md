@@ -577,3 +577,39 @@ also checks that prose questions cannot use the numerical fallback. The
 sanitized request-shape trace and raw results are in the ignored local report.
 After this focused change, the full local suite passed **272 tests, 1 skipped**
 and `ruff check src tests app.py scripts` passed.
+
+## Final three-phase unfamiliar-document interview test (2026-10-21)
+
+Seven new fictional files were generated after the application code was frozen:
+three PDFs, three XLSX workbooks and one DOCX. The production `ask()` path was
+used with Ollama Cloud `gemma4:31b`, Gemini `gemini-2.5-flash` and Groq
+`openai/gpt-oss-20b`. The three phases asked for signed contract scope and
+deliverables, all Signed Base SAR BOQ items strictly above SAR 1 million, and a
+cross-document decision about change order CO-12, a proposed handover, contract
+sums and final acceptance. The original files were separately opened to check
+the answers, not just their citation status.
+
+The BOQ's correct result is EL-401 at `03_Electrical_BOQ.xlsx | Signed Base!E7`
+for SAR 1,560,000 and EL-402 at `E8` for SAR 1,440,000: two matches totaling
+SAR 3,000,000. EL-403 at `E9` is exactly SAR 1 million and excluded. CO-12
+authorizes 60 additional metres of West Wing cable for SAR 480,000, raising
+the original SAR 8,240,000 contract to SAR 8,720,000. It neither authorizes
+remote monitoring nor extends the binding 30 June 2031 handover. A 15 July
+proposal was not approved; circuits C-04 and C-05 need retesting, and no final
+acceptance certificate was issued.
+
+| Model | Scope phase | BOQ phase | Cross-document phase |
+| --- | --- | --- | --- |
+| Gemma 4 31B | All requested facts, with extra BOQ quantities | Correct deterministic result | Correct with separate original sources |
+| Gemini 2.5 Flash | Requested facts present, but BOQ-only items were also described as contract scope | Correct deterministic result | HTTP 429 on first call and one retry; no answer |
+| Groq GPT-OSS 20B | First final request HTTP 400 `json_validate_failed`; retry returned the requested facts with extra BOQ quantities | Correct result from a labeled Python completion after provider limit | HTTP 429 on first call and one retry; no answer |
+
+All citations in completed answers resolved to indexed passages or cells. Their
+presence did not prevent Gemini's scope error, demonstrating why evidence-linked
+claims remain human-reviewable rather than guaranteed. Each completed answer
+included a real model document tool call; the BOQ calculations were performed
+in Python. Twelve production answer sessions were made, including the three
+bounded external retries. The full source files, displayed answers, tool calls,
+and retrieved originals are saved only under ignored
+`.local/final_interview_3_results/RESULTS.md` and sibling JSON files. This was
+not a browser test or a reliability estimate for unfamiliar employer documents.
