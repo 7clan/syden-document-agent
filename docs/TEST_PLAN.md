@@ -560,3 +560,20 @@ The full local suite passed **270 tests, 1 skipped** with
 Detailed local answers, actual tool traces, and original indexed evidence are
 in `.local/provider_reliability_results/RESULTS.md` and sibling JSON files.
 The generated documents and raw results are ignored by Git.
+
+### Provider cooldown retest (2026-10-21)
+
+Gemini 2.5 Flash answered the fictional water-plant scope question correctly
+with the contract page citation after its earlier 429s. Its subsequent BOQ and
+cross-document approval requests again returned 429, so neither answer was
+verified live for that model. Groq GPT-OSS 20B's BOQ request completed three
+real tool rounds, then hit 429 on a fourth as the repeated context grew. A
+Groq-only fallback now runs the deterministic numeric/date path after prior
+successful document tool use and labels it application initiated. The live BOQ
+retest returned WP-11/E9 and WP-12/E10 with the correct SAR 2,690,000 sum and
+indexed cell evidence. Its cross-document approval question still returned
+429 after one cooldown retry; no prose answer was invented. A focused test
+also checks that prose questions cannot use the numerical fallback. The
+sanitized request-shape trace and raw results are in the ignored local report.
+After this focused change, the full local suite passed **272 tests, 1 skipped**
+and `ruff check src tests app.py scripts` passed.

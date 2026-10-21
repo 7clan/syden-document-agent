@@ -2019,6 +2019,16 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
             request["response_format"] = answer_format
         try:
             response = send(request, "final" if format_retry else "tool")
+        except ProviderRateLimitError:
+            if (provider == "groq"
+                    and any(call.get("name") in TOOLS and call.get("ok") for call in trace)
+                    and (_needs_numeric_query(question) or _needs_dates_query(question))):
+                trace.append({"name": "provider_limit_deterministic_completion",
+                              "ok": True, "origin": "application", "http_status": 429,
+                              "reason": "Groq rate limit after document tools"})
+                return _source_linked_answer(conn, "", citations, trace, question,
+                                             numeric_args, _has_dates_result(trace))
+            raise
         except Exception as exc:  # Retry only unsupported schema errors.
             if not native_schema or not _schema_unsupported(exc):
                 raise
@@ -2200,7 +2210,18 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
     answer_format = _answer_format(provider, model, native_schema)
     if answer_format:
         request["response_format"] = answer_format
-    response = send(request, "final")
+    try:
+        response = send(request, "final")
+    except ProviderRateLimitError:
+        if (provider == "groq"
+                and any(call.get("name") in TOOLS and call.get("ok") for call in trace)
+                and (_needs_numeric_query(question) or _needs_dates_query(question))):
+            trace.append({"name": "provider_limit_deterministic_completion",
+                          "ok": True, "origin": "application", "http_status": 429,
+                          "reason": "Groq rate limit after document tools"})
+            return _source_linked_answer(conn, "", citations, trace, question,
+                                         numeric_args, _has_dates_result(trace))
+        raise
     return _source_linked_answer(conn, (response.choices[0].message.content or "").strip(),
                                  citations, trace, question, numeric_args,
                                  _has_dates_result(trace))

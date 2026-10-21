@@ -130,6 +130,52 @@ def test_groq_gpt_empty_no_arg_call_is_repaired_and_audited(monkeypatch):
         "ok"] is True
 
 
+def test_groq_rate_limit_after_tool_keeps_python_boq_result(monkeypatch, tmp_path):
+    from openpyxl import Workbook
+
+    from syden_agent.ingest import ingest_folder
+
+    class Groq429(Exception):
+        status_code = 429
+        response = SimpleNamespace(headers={"retry-after": "40"})
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Base"
+    sheet.append(["Item", "Amount (SAR)"])
+    sheet.append(["A", 1_250_000])
+    sheet.append(["B", 1_000_000])
+    book.save(tmp_path / "Costs.xlsx")
+    conn = connect(":memory:")
+    ingest_folder(conn, tmp_path)
+    requests = _client(monkeypatch, [
+        _tool("query_spreadsheet", '{"file":"Costs.xlsx","sheet":"Base",'
+              '"operator":"all"}'), Groq429("private quota response"),
+    ])
+    answer = _ask_openai(conn, "List every Base cost item strictly above "
+                         "SAR 1 million in Costs.xlsx", 3, provider="groq",
+                         model_override="openai/gpt-oss-20b")
+    assert len(requests) == 2
+    assert answer.verification_status == "deterministically_verified"
+    assert answer.sources == ["Costs.xlsx | Base!B2"]
+    assert "1250000" in answer.text
+    assert any(call["name"] == "provider_limit_deterministic_completion" and
+               call["origin"] == "application" for call in answer.tool_calls)
+
+
+def test_groq_rate_limit_never_invents_prose_answer(monkeypatch):
+    class Groq429(Exception):
+        status_code = 429
+        response = SimpleNamespace(headers={"retry-after": "40"})
+
+    conn = _index()
+    _client(monkeypatch, [_tool("search_documents", '{"query":"ARBOR-17"}'),
+                          Groq429("private quota response")])
+    with pytest.raises(ProviderRateLimitError):
+        _ask_openai(conn, "What is the code?", 3, provider="groq",
+                    model_override="openai/gpt-oss-20b")
+
+
 def test_gemini_rate_limit_is_bounded_and_phase_specific(monkeypatch):
     from google import genai
 
