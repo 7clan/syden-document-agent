@@ -135,6 +135,21 @@ def test_question_date_lookup_finds_decision_in_other_document():
     assert "not approved" in context
 
 
+def test_date_status_question_hands_off_other_file_rows_without_inventing_status():
+    conn = _sources()
+    conn.execute("INSERT INTO passages(document_id,page,chunk,text) VALUES"
+                 "(2,2,0,'The binding final handover deadline is 14 February 2028.')")
+    question = ("What is the contractual handover date? Distinguish it from "
+                "planning or proposed dates in other files.")
+    context, citations = _question_date_context(conn, question, set())
+    assert "Fresh.xls | Gates!C5" in citations
+    assert "2028-03-21" in context
+    assert "Planning" in context
+    assert "Not approved" in context
+    assert "Terms.pdf | page 2 | chunk 0" not in citations
+    assert _question_date_context(conn, "Did the deadline change?", set()) == ("", [])
+
+
 def test_date_anchor_accepts_source_iso_and_claim_month_name():
     conn = _sources()
     citation = "Fresh.xls | Gates | row 4"

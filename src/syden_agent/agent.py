@@ -27,6 +27,7 @@ from .tools import (
     _search_excerpt,
     extract_dates,
     get_evidence,
+    list_documents,
     query_spreadsheet,
     search_documents,
 )
@@ -453,7 +454,7 @@ def _claim_excerpt(original: str, claim: str, width: int = 700) -> str:
 
 def _question_date_context(conn: sqlite3.Connection, question: str,
                            sent: set[tuple[str, str]]) -> tuple[str, list[str]]:
-    """Hand off passages containing dates named in the question, across files."""
+    """Hand off named dates and bounded status context from original sources."""
     dates = list(dict.fromkeys(match.group() for match in DATE_REGEX.finditer(question)))[:3]
     citations: list[str] = []
     for date in dates:
@@ -467,6 +468,21 @@ def _question_date_context(conn: sqlite3.Connection, question: str,
                 break
         if len(citations) >= 8:
             break
+    if (re.search(r"(?i)\b(?:distinguish|classify|compare)\b", question)
+            and re.search(r"(?i)\b(?:dates?|deadlines?|handover|milestones?|deliverables?)\b",
+                          question)
+            and re.search(r"(?i)\b(?:planning|forecast|propos\w*|unapprov\w*|targets?)\b",
+                          question)):
+        candidates = extract_dates(conn, limit=500)
+        for item in candidates["dates"]:
+            nearby = item["context"]
+            nearby_text = (" ".join(str(value) for value in nearby.values())
+                           if isinstance(nearby, dict) else str(nearby))
+            if re.search(r"(?i)\b(?:planning|forecast|propos\w*|unapprov\w*|targets?)\b",
+                         nearby_text):
+                citations.append(item["citation"])
+            if len(set(citations)) >= 8:
+                break
     context, _ = _evidence_handoff(conn, citations, question, sent, budget=5000)
     return context, list(dict.fromkeys(citations))
 
@@ -534,6 +550,11 @@ def _financial_comparison_context(conn: sqlite3.Connection, question: str
     lines.append("Original contract passages retrieved separately:")
     lines.extend(passages or ["No contract passage was located; request clarification if needed."])
     return "\n".join(lines), list(dict.fromkeys(citations)), incomplete
+
+
+def _display_amount(value: Decimal) -> str:
+    rendered = format(value, ",f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
 
 
 def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
@@ -615,12 +636,47 @@ def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
                       "boq_file": path, "boq_sheet": sheet,
                       "source_count": len(cells) + len(contract_matches)}]
     text = (f"{'Yes' if same else 'No'}. The selected BOQ worksheet {path} | {sheet} "
-            f"totals {currency} {amount}. The original contract value is "
-            f"{currency} {contract_sum}. These values "
+            f"totals {currency} {_display_amount(amount)}. The original contract value is "
+            f"{currency} {_display_amount(contract_sum)}. These values "
             f"{'are equal' if same else 'are not equal'}.")
     structured = {"boq_subtotal": str(amount), "contract_value": str(contract_sum),
                   "currency": currency, "boq_sheet": sheet}
     sources = [*cells, *contract_matches]
+    item_match = re.search(r"(?i)\b(?:line\s+)?item\s+([\w.-]+)\b", question)
+    if item_match and any(char.isdigit() for char in item_match.group(1)):
+        identifier = item_match.group(1)
+        filter_args = _question_filter(question, {})
+        operator = filter_args.get("operator")
+        threshold = _num(filter_args.get("value"))
+        item_rows = [row for row in result["matches"] if any(
+            str(value).casefold() == identifier.casefold()
+            for value in row["values"].values())]
+        comparisons = {"gt": lambda value: value > threshold,
+                       "gte": lambda value: value >= threshold,
+                       "lt": lambda value: value < threshold,
+                       "lte": lambda value: value <= threshold,
+                       "eq": lambda value: value == threshold}
+        if (len(item_rows) == 1 and operator in comparisons
+                and threshold is not None and threshold.is_finite()
+                and (not filter_args.get("currency") or filter_args["currency"] == currency)):
+            row = item_rows[0]
+            item_amount = Decimal(row["amount_exact"])
+            verdict = "Yes" if comparisons[operator](item_amount) else "No"
+            text = (f"{verdict}. Item {identifier} is {currency} "
+                    f"{_display_amount(item_amount)}; the comparison threshold is "
+                    f"{currency} {_display_amount(threshold)} — "
+                    f"{row['citation']}\n\n" + text)
+            structured["item_comparison"] = {
+                "identifier": identifier, "amount": str(item_amount),
+                "threshold": str(threshold), "operator": operator,
+                "result": verdict == "Yes", "citation": row["citation"]}
+            trace.append({"name": "host_item_comparison", "ok": True,
+                          "origin": "application", "arithmetic_checked": True,
+                          "citation": row["citation"]})
+        else:
+            text = (f"The amount comparison for item {identifier} could not be "
+                    "independently checked.\n\n" + text)
+            structured["item_comparison_incomplete"] = True
     if re.search(r"(?i)\brevised\b", question):
         increase_pattern = re.compile(
             r"(?i)\b(?:price\s+)?increase\b[^.!?\n]{0,60}?\b"
@@ -645,14 +701,18 @@ def _checked_financial_comparison(conn: sqlite3.Connection, question: str,
                 changes.append((delta, updated, citation))
         if changes and len({(delta, updated) for delta, updated, _ in changes}) == 1:
             delta, updated, citation = changes[0]
-            text += (f" A retrieved change passage states a {currency} {delta} increase "
-                     f"and a revised contract sum of {currency} {updated}; "
-                     f"{contract_sum} + {delta} = {updated}.")
+            text += (f" A retrieved change passage states a {currency} "
+                     f"{_display_amount(delta)} increase and a revised contract sum of "
+                     f"{currency} {_display_amount(updated)}; "
+                     f"{_display_amount(contract_sum)} + {_display_amount(delta)} = "
+                     f"{_display_amount(updated)}.")
             sources.append(citation)
             structured.update({"price_increase": str(delta), "revised_contract_sum": str(updated)})
         else:
             text += " The requested revised amount could not be independently checked."
-    return Answer(text, _verified_sources(conn, sources), trace, structured, "evidence_linked")
+    return Answer(text, _verified_sources(conn, sources), trace, structured,
+                  "unverified" if structured.get("item_comparison_incomplete")
+                  else "evidence_linked")
 
 
 def _matching_sheet_context(conn: sqlite3.Connection, question: str
@@ -1301,6 +1361,39 @@ def _ambiguous_numeric_fallback(trace: list[dict[str, Any]]) -> Answer:
                   verification_status="unverified")
 
 
+def _indexed_inventory_answer(conn: sqlite3.Connection, question: str,
+                              trace: list[dict[str, Any]]) -> Answer | None:
+    """Answer a file-format inventory from index records after a real tool call."""
+    if not any(call.get("name") == "list_documents" and call.get("ok") for call in trace):
+        return None
+    if not (re.search(r"(?i)\b(?:files?|documents?)\b", question)
+            and re.search(r"(?i)\b(?:list|which|what|how many|count|formats?|indexed)\b",
+                          question)):
+        return None
+    # A mixed request still needs the model's passage-level answer.
+    if re.search(r"(?i)\b(?:summarize|scope|extract|calculate|compare|cost|dates?|"
+                 r"deliverables?|payment|contract)\b", question):
+        return None
+    inventory = list_documents(conn)
+    documents = inventory["documents"]
+    counts: dict[str, int] = {}
+    for doc in documents:
+        counts[doc["kind"]] = counts.get(doc["kind"], 0) + 1
+    names = {"pdf": "PDF", "xlsx": "Excel (.xlsx)", "xlsm": "Excel (.xlsm)",
+             "xls": "Excel (.xls)", "docx": "Word (.docx)"}
+    groups = [f"{count} {names.get(kind, kind)}" for kind, count in sorted(counts.items())]
+    lines = [f"Indexed files: {len(documents)}. " +
+             ("; ".join(groups) + "." if groups else "No files are indexed.")]
+    for doc in documents:
+        status = f" ({doc['status']})" if doc["status"] != "ready" else ""
+        lines.append(f"- {doc['path']} — {names.get(doc['kind'], doc['kind'])}{status}")
+    return Answer("\n".join(lines), [doc["citation"] for doc in documents],
+                  [*trace, {"name": "host_document_inventory", "ok": True,
+                            "origin": "application", "count": len(documents)}],
+                  structured={"document_inventory": inventory},
+                  verification_status="deterministically_verified")
+
+
 def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[str],
                           trace: list[dict[str, Any]], question: str = "",
                           numeric_args: dict[str, Any] | None = None,
@@ -1309,6 +1402,9 @@ def _source_linked_answer(conn: sqlite3.Connection, text: str, citations: list[s
     if not trace:
         return Answer("The model did not call a document tool; no grounded answer is available.",
                       [], trace)
+    inventory = _indexed_inventory_answer(conn, question, trace)
+    if inventory is not None:
+        return inventory
     comparison = _checked_financial_comparison(conn, question, trace)
     if comparison is not None:
         return comparison

@@ -81,7 +81,7 @@ is inspectable but is not guaranteed semantically correct."
 1. Run `python -m streamlit run app.py`. Choose Ollama Cloud / `gemma4:31b`.
 2. Set **Document folder** to the reviewer-provided folder, click **Index
    folder**, and inspect the ready/failed count. The local synthetic folder
-   `.local/final_interview_3` is available only on this development computer.
+   `.local/interview_tests/final_interview_3` is available only on this development computer.
 3. Ask a contract-scope question. Open a PDF source and show the original page.
 4. Ask for BOQ items strictly above SAR 1 million. Show the selected amount
    column, exact cells, sum and the tool audit.

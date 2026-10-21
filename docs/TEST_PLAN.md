@@ -611,7 +611,7 @@ included a real model document tool call; the BOQ calculations were performed
 in Python. Twelve production answer sessions were made, including the three
 bounded external retries. The full source files, displayed answers, tool calls,
 and retrieved originals are saved only under ignored
-`.local/final_interview_3_results/RESULTS.md` and sibling JSON files. This was
+`.local/interview_tests/final_interview_3_results/RESULTS.md` and sibling JSON files. This was
 not a browser test or a reliability estimate for unfamiliar employer documents.
 
 ## Focused Ollama GPT-OSS 20B prompt retest (2026-10-21)
@@ -640,4 +640,4 @@ guaranteed. The final run had no invented tool names, but one three-question
 sample cannot establish that the prompt prevents future tool errors or
 omissions. The ignored local JSON audits are named
 `*_ollama_cloud_gpt-oss_20b_tighter_prompt_v2.json` in
-`.local/final_interview_3_results/`. No browser interaction was performed.
+`.local/interview_tests/final_interview_3_results/`. No browser interaction was performed.

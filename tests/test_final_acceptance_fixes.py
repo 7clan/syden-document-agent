@@ -11,6 +11,7 @@ from syden_agent.agent import (
     _ask_gemini,
     _checked_financial_comparison,
     _financial_comparison_context,
+    _indexed_inventory_answer,
     _matching_sheet_context,
     _source_linked_answer,
     _verified_numeric_answer,
@@ -72,6 +73,59 @@ def test_financial_comparison_checks_original_values_in_code():
     assert "Terms.pdf | page 2 | chunk 0" in answer.sources
     assert answer.tool_calls[-1]["origin"] == "application"
     assert answer.tool_calls[-1]["arithmetic_checked"] is True
+
+
+def test_financial_comparison_also_answers_exact_item_threshold():
+    conn = _financial_index()
+    answer = _checked_financial_comparison(
+        conn, "Is item A-01 strictly above SAR 600,000? "
+              "Does the Base Costs selected-items subtotal equal the original contract sum?",
+        [{"name": "list_documents", "ok": True}])
+    assert answer is not None
+    assert "No. Item A-01 is SAR 600,000" in answer.text
+    assert "Costs.xlsx | Base Costs!B2" in answer.text
+    assert "totals SAR 900,000" in answer.text
+    assert "original contract value is SAR 2,000,000" in answer.text
+    assert answer.structured["item_comparison"]["result"] is False
+    assert answer.structured["item_comparison"]["operator"] == "gt"
+    assert any(call["name"] == "host_item_comparison" for call in answer.tool_calls)
+
+
+def test_financial_comparison_does_not_invent_missing_item_amount():
+    answer = _checked_financial_comparison(
+        _financial_index(), "Is item A-99 above SAR 600,000? "
+                            "Does the BOQ subtotal equal the original contract sum?",
+        [{"name": "list_documents", "ok": True}])
+    assert answer is not None
+    assert answer.verification_status == "unverified"
+    assert answer.structured["item_comparison_incomplete"] is True
+    assert "could not be independently checked" in answer.text
+    assert "No. Item A-99" not in answer.text
+
+
+def test_index_inventory_counts_formats_from_records_only():
+    conn = connect(":memory:")
+    for name, kind in (("a.pdf", "pdf"), ("b.pdf", "pdf"), ("c.pdf", "pdf"),
+                       ("d.xlsx", "xlsx"), ("e.xlsx", "xlsx"),
+                       ("f.docx", "docx")):
+        conn.execute("INSERT INTO documents(path,kind,status) VALUES(?,?,'ready')",
+                     (name, kind))
+    trace = [{"name": "list_documents", "ok": True}]
+    question = ("List every indexed file and identify its format. "
+                "How many PDFs, Excel workbooks, and Word documents are there?")
+    answer = _indexed_inventory_answer(conn, question, trace)
+    assert answer is not None
+    assert answer.verification_status == "deterministically_verified"
+    assert "Indexed files: 6" in answer.text
+    assert "3 PDF" in answer.text
+    assert "2 Excel (.xlsx)" in answer.text
+    assert "1 Word (.docx)" in answer.text
+    assert len(answer.sources) == 6
+    assert all(source.endswith(" | document") for source in answer.sources)
+    assert answer.tool_calls[-1]["origin"] == "application"
+    assert _indexed_inventory_answer(conn, question, []) is None
+    assert _indexed_inventory_answer(
+        conn, "List files and summarize contract scope", trace) is None
 
 
 def test_financial_comparison_abstains_if_base_sheet_is_ambiguous():
