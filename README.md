@@ -318,8 +318,6 @@ SQLite: documents + PDF passages/BOQ rows + Word blocks + Excel rows
 ```
 
 The architecture is deliberately small enough to explain and extend live.
-For a file-by-file code tour and a short demo sequence, use the
-[interview guide](docs/INTERVIEW_GUIDE.md).
 For full implementation requirements and hardening priorities, see **`PROMPT_FOR_CODEX.md`**.
 
 ## Run offline checks
