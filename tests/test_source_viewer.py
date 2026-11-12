@@ -1,8 +1,8 @@
 """Source controls show exact indexed locations without trusting generated paths."""
 import json
 
-from syden_agent.db import connect
-from syden_agent.source_viewer import local_pdf_page, source_detail
+from document_agent.db import connect
+from document_agent.source_viewer import local_pdf_page, source_detail
 
 
 def test_source_detail_resolves_pdf_word_and_excel_locations():

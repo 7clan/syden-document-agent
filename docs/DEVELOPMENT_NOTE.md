@@ -1,4 +1,4 @@
-# Development note for SYDEN
+# Development history and design decisions
 
 I used OpenAI Codex inside VS Code as my AI coding agent. I spent approximately
 **11 hours** actively working on the project across 19–21 October 2026,

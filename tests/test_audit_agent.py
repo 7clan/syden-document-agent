@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from openpyxl import Workbook
 
-from syden_agent.agent import (
+from document_agent.agent import (
     _ask_openai,
     _final_answer,
     _needs_numeric_query,
@@ -14,8 +14,8 @@ from syden_agent.agent import (
     _source_linked_answer,
     _supported_prose,
 )
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
 
 
 def _indexed_boq(tmp_path):

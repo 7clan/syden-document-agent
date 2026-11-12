@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from syden_agent.agent import (
+from document_agent.agent import (
     ProviderRateLimitError,
     _model_tool_result,
     _rate_limited_create,
@@ -24,7 +24,7 @@ class TooManyRequests(Exception):
 
 def test_retry_after_honored_once_with_bounded_wait(monkeypatch):
     waits = []
-    monkeypatch.setattr("syden_agent.agent.time.sleep", waits.append)
+    monkeypatch.setattr("document_agent.agent.time.sleep", waits.append)
     calls = []
 
     def create(**kwargs):
@@ -41,7 +41,7 @@ def test_retry_after_honored_once_with_bounded_wait(monkeypatch):
 
 def test_long_or_repeated_429_is_friendly_and_never_loops(monkeypatch):
     waits = []
-    monkeypatch.setattr("syden_agent.agent.time.sleep", waits.append)
+    monkeypatch.setattr("document_agent.agent.time.sleep", waits.append)
     for delay, expected_calls in ((11, 1), (1, 2)):
         calls = []
 
@@ -69,7 +69,7 @@ def test_gemini_http_diagnostic_is_sanitized_and_phase_specific():
     error = RuntimeError("private response body")
     error.code = 503
     error.status = "UNAVAILABLE"
-    error._syden_phase = "tool"
+    error._document_phase = "tool"
     assert provider_error_diagnostic(error) == {
         "http_status": 503, "code": "unavailable", "phase": "tool"}
     assert safe_provider_error(error, "gemini") == (
@@ -81,7 +81,7 @@ def test_ollama_timeout_has_safe_specific_message():
         pass
 
     error = APITimeoutError("private request data")
-    error._syden_phase = "tool"
+    error._document_phase = "tool"
     assert provider_error_diagnostic(error) == {
         "http_status": None, "code": "timeout", "phase": "tool"}
     assert safe_provider_error(error, "ollama_cloud") == (
@@ -90,7 +90,7 @@ def test_ollama_timeout_has_safe_specific_message():
 
 def test_ollama_server_error_retried_once_without_replaying_history(monkeypatch):
     waits = []
-    monkeypatch.setattr("syden_agent.agent.time.sleep", waits.append)
+    monkeypatch.setattr("document_agent.agent.time.sleep", waits.append)
 
     class ServerError(Exception):
         status_code = 500

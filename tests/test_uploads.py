@@ -5,10 +5,10 @@ import io
 
 import pytest
 
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import list_documents, search_documents
-from syden_agent.uploads import save_uploaded_file
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.tools import list_documents, search_documents
+from document_agent.uploads import save_uploaded_file
 
 
 def test_uploads_create_folder_and_save_multiple_files(tmp_path):
@@ -142,7 +142,7 @@ def test_failed_replacement_keeps_original_and_removes_temp_file(tmp_path, monke
     def fail_rename(_source, _dest):
         raise OSError("Simulated rename failure")
 
-    monkeypatch.setattr("syden_agent.uploads.os.replace", fail_rename)
+    monkeypatch.setattr("document_agent.uploads.os.replace", fail_rename)
     with pytest.raises(OSError, match="Simulated rename failure"):
         save_uploaded_file(
             folder, "Contract.pdf", b"new content", 1024, replace_existing=True,

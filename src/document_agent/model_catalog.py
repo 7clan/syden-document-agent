@@ -47,7 +47,7 @@ def fallback_catalog(provider: str, warning: str = "") -> ModelCatalog:
 
 def _request_json(url: str, api_key: str) -> dict:
     request = Request(url, headers={"Authorization": f"Bearer {api_key}",
-                                    "User-Agent": "SYDEN-Document-Agent"})
+                                    "User-Agent": "Document-Intelligence-Agent"})
     with urlopen(request, timeout=10) as response:
         return json.load(response)
 

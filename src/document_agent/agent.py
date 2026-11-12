@@ -284,7 +284,7 @@ def provider_error_diagnostic(exc: Exception) -> dict[str, Any]:
         raw_code = raw_code.lower()
     code = (raw_code if isinstance(raw_code, str)
             and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw_code) else "provider_error")
-    phase = getattr(exc, "request_phase", None) or getattr(exc, "_syden_phase", None)
+    phase = getattr(exc, "request_phase", None) or getattr(exc, "_document_phase", None)
     return {"http_status": status if isinstance(status, int) and 100 <= status <= 599 else None,
             "code": code,
             "phase": phase if phase in {"tool", "final"} else "unknown"}
@@ -1762,7 +1762,7 @@ def _ask_gemini(conn: sqlite3.Connection, question: str, max_rounds: int,
             return client.models.generate_content(model=model, contents=contents, config=config)
         except Exception as exc:
             try:
-                exc._syden_phase = phase
+                exc._document_phase = phase
             except (AttributeError, TypeError):
                 pass
             if getattr(exc, "code", None) == 429:
@@ -1989,7 +1989,7 @@ def _answer_format(provider: str, model: str,
     """Strict output is sent only on a request without tools for Groq."""
     if native_schema or (provider == "groq" and model in _GROQ_STRICT_MODELS):
         return {"type": "json_schema", "json_schema": {
-            "name": "syden_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
+            "name": "document_evidence_answer", "strict": True, "schema": ANSWER_SCHEMA}}
     return None
 
 
@@ -2049,7 +2049,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                                         retry_server_errors=not ollama_gpt)
         except Exception as exc:
             try:
-                exc._syden_phase = phase
+                exc._document_phase = phase
             except (AttributeError, TypeError):
                 pass
             status = getattr(exc, "status_code", None)
@@ -2090,7 +2090,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                                                 retry_server_errors=False)
                 except Exception as retry_exc:
                     try:
-                        retry_exc._syden_phase = "tool" if retry_as_tool else "final"
+                        retry_exc._document_phase = "tool" if retry_as_tool else "final"
                     except (AttributeError, TypeError):
                         pass
                     raise
@@ -2133,7 +2133,7 @@ def _ask_openai(conn: sqlite3.Connection, question: str, max_rounds: int,
                                             recovery, provider, deadline)
             except Exception as retry_exc:
                 try:
-                    retry_exc._syden_phase = "tool" if retry_as_tool else "final"
+                    retry_exc._document_phase = "tool" if retry_as_tool else "final"
                 except (AttributeError, TypeError):
                     pass
                 if _output_parse_failed(retry_exc):

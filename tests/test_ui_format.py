@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from syden_agent.ui_format import display_safe_rows
+from document_agent.ui_format import display_safe_rows
 
 
 def test_date_rows_with_text_and_workbook_dictionary_context_are_arrow_safe():

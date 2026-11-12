@@ -1,5 +1,5 @@
 """Provider model lists are filtered by actual tool capability metadata."""
-from syden_agent import model_catalog as catalog
+from document_agent import model_catalog as catalog
 
 
 def test_groq_discovers_additional_text_tool_models_and_excludes_other_roles():

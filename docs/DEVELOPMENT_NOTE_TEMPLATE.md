@@ -1,4 +1,4 @@
-# SYDEN AI Coding Agent Development Note (submit approximately half a page)
+# Document Intelligence Agent AI Coding Agent Development Note (optional development log)
 
 **Coding agent used:** OpenAI Codex inside VS Code (change if actual setup differs).
 

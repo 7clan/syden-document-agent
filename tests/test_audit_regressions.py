@@ -8,9 +8,9 @@ from docx import Document
 from openpyxl import Workbook
 from reportlab.pdfgen import canvas
 
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import extract_dates, get_evidence, query_spreadsheet
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.tools import extract_dates, get_evidence, query_spreadsheet
 
 
 def test_explicit_currency_columns_in_xlsx_and_xls(tmp_path):

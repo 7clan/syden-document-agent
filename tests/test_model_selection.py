@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from syden_agent import agent, model_catalog
-from syden_agent.agent import Answer, _compatible_config
-from syden_agent.db import connect
+from document_agent import agent, model_catalog
+from document_agent.agent import Answer, _compatible_config
+from document_agent.db import connect
 
 
 def test_compatible_provider_accepts_per_request_model_override(monkeypatch):
@@ -68,7 +68,7 @@ def test_streamlit_selector_switches_provider_and_model(monkeypatch, tmp_path):
     connection.commit()
     connection.close()
 
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_file))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-not-a-real-key")
     monkeypatch.setenv("GROQ_MODEL", "my-configured-groq-model")
@@ -121,7 +121,7 @@ def test_streamlit_catalog_cache_refresh_persistence_and_manual_warning(monkeypa
     connection.execute("INSERT INTO documents(path,kind,status) VALUES('Demo.pdf','pdf','ready')")
     connection.commit()
     connection.close()
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_file))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-groq")
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-ollama")
@@ -168,7 +168,7 @@ def test_streamlit_catalog_cache_refresh_persistence_and_manual_warning(monkeypa
 def test_gemma_is_initial_ollama_selection_but_user_can_change_it(monkeypatch, tmp_path):
     from streamlit.testing.v1 import AppTest
 
-    monkeypatch.setenv("SYDEN_DB_PATH", str(tmp_path / "gemma-default.db"))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(tmp_path / "gemma-default.db"))
     monkeypatch.setenv("LLM_PROVIDER", "ollama_cloud")
     monkeypatch.setenv("OLLAMA_MODEL", "gemma4:31b")
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-ollama")
@@ -193,7 +193,7 @@ def test_streamlit_empty_live_catalog_reports_no_compatible_models(monkeypatch, 
     connection.execute("INSERT INTO documents(path,kind,status) VALUES('Demo.pdf','pdf','ready')")
     connection.commit()
     connection.close()
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_file))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-groq-empty")
     monkeypatch.delenv("GROQ_MODEL", raising=False)
@@ -217,7 +217,7 @@ def test_streamlit_model_listing_failure_shows_fallback_ids(monkeypatch, tmp_pat
     connection.execute("INSERT INTO documents(path,kind,status) VALUES('Demo.pdf','pdf','ready')")
     connection.commit()
     connection.close()
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_file))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-ollama-fallback")
     monkeypatch.setattr(model_catalog, "discover_models",
@@ -244,7 +244,7 @@ def test_streamlit_never_shows_provider_failed_generation(monkeypatch, tmp_path)
                        (str(tmp_path),))
     connection.commit()
     connection.close()
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_file))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_file))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-groq-error")
     monkeypatch.setattr(model_catalog, "discover_models", lambda provider, key:

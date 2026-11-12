@@ -5,16 +5,16 @@ import json
 import sys
 from types import SimpleNamespace
 
-from syden_agent.agent import (
+from document_agent.agent import (
     _ask_openai,
     _cached_tool,
     _final_answer,
     _verified_numeric_answer,
     ask,
 )
-from syden_agent.claim_verifier import question_parts, validate_claims
-from syden_agent.db import connect
-from syden_agent.tools import query_spreadsheet
+from document_agent.claim_verifier import question_parts, validate_claims
+from document_agent.db import connect
+from document_agent.tools import query_spreadsheet
 
 
 def _index(*items):
@@ -142,7 +142,7 @@ def test_recovered_error_and_bounded_search_do_not_downgrade_supported_fact():
 
 
 def test_failed_local_tool_call_can_recover_on_retry(monkeypatch):
-    from syden_agent import agent
+    from document_agent import agent
 
     responses = [{"error": "transient failure"}, {"documents": []}]
     monkeypatch.setattr(agent, "_execute", lambda *_: responses.pop(0))

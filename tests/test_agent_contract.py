@@ -3,7 +3,7 @@
 import sys
 from types import SimpleNamespace
 
-from syden_agent.agent import (
+from document_agent.agent import (
     NON_GEMMA_EVIDENCE_CHECK,
     OLLAMA_GPT_OSS_20B_TOOLS,
     SYSTEM,
@@ -17,8 +17,8 @@ from syden_agent.agent import (
     _needs_numeric_query,
     _system_prompt,
 )
-from syden_agent.db import connect
-from syden_agent.tools import TOOL_SCHEMAS, TOOLS, _num
+from document_agent.db import connect
+from document_agent.tools import TOOL_SCHEMAS, TOOLS, _num
 
 
 def test_document_tools_are_allowlisted():
@@ -198,7 +198,7 @@ def test_gemini_tool_loop_returns_structured_claim_without_verification_call(mon
     def legacy_verifier(*_args):
         raise AssertionError("legacy verifier called")
 
-    monkeypatch.setattr("syden_agent.agent.validate_claims", legacy_verifier)
+    monkeypatch.setattr("document_agent.agent.validate_claims", legacy_verifier)
     answer = _ask_gemini(conn, "What is the synthetic code?", 3)
     assert answer.sources == [cite]
     assert answer.verification_status == "evidence_linked"

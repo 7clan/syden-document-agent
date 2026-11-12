@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 
-from syden_agent.agent import _final_answer
-from syden_agent.claim_verifier import validate_claims
-from syden_agent.db import connect
+from document_agent.agent import _final_answer
+from document_agent.claim_verifier import validate_claims
+from document_agent.db import connect
 
 
 def _index(*passages):

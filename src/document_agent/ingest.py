@@ -285,7 +285,7 @@ def ingest_folder(conn: sqlite3.Connection, folder: str | Path) -> dict[str, Any
     conn.commit()
     if not candidates:
         return {"indexed": 0, "failed": 0, "files": [], "error": "Folder is empty"}
-    max_bytes = int(os.getenv("SYDEN_MAX_FILE_MB", "100")) * 1024 * 1024
+    max_bytes = int(os.getenv("DOCUMENT_AGENT_MAX_FILE_MB", "100")) * 1024 * 1024
     reports = []
     for path in candidates:
         suffix = path.suffix.lower()

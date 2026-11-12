@@ -6,11 +6,11 @@ import io
 from openpyxl import Workbook
 from reportlab.pdfgen import canvas
 
-from syden_agent.agent import _final_answer, _needs_dates_query, _question_filter
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.spreadsheet import query_spreadsheet
-from syden_agent.tools import inspect_document
+from document_agent.agent import _final_answer, _needs_dates_query, _question_filter
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.spreadsheet import query_spreadsheet
+from document_agent.tools import inspect_document
 
 
 def _contract_and_qa(tmp_path):

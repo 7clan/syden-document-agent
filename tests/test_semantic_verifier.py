@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 
-from syden_agent.agent import _final_answer
-from syden_agent.db import connect
-from syden_agent.semantic_verifier import (
+from document_agent.agent import _final_answer
+from document_agent.db import connect
+from document_agent.semantic_verifier import (
     parse_judgement,
     verification_request,
     verify_judgement,

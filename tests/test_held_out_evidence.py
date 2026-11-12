@@ -8,10 +8,10 @@ from docx import Document
 from openpyxl import Workbook
 from reportlab.pdfgen import canvas
 
-from syden_agent.claim_verifier import validate_claims
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import get_evidence, query_spreadsheet, search_documents
+from document_agent.claim_verifier import validate_claims
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.tools import get_evidence, query_spreadsheet, search_documents
 
 
 def _corpus(tmp_path):
