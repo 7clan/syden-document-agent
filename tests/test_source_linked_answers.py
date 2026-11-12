@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from syden_agent.agent import _question_date_context, _source_linked_answer
-from syden_agent.db import connect
+from document_agent.agent import _question_date_context, _source_linked_answer
+from document_agent.db import connect
 
 
 def _sources():

@@ -1,9 +1,8 @@
-# Codex development instructions
+# Document Intelligence Agent — developer instructions
 
-Read `PROMPT_FOR_CODEX.md` before editing. This is a time-limited SYDEN hiring take-home project.
-Prefer small, testable modifications with clear diffs. Run `pytest` and `ruff check` after changes.
-Do not fabricate passing tests, model tool calls, successful API integrations, or source references.
-Never commit `.env`, API credentials, generated DB files or real company documents.
-Do not alter user-provided original PDF/Excel files. Model-generated code/SQL/shell are not permitted in the document query tool.
-Keep the LLM provider swappable (Gemini, OpenAI, Groq-hosted Llama); verify the chosen model truly supports tool calling.
-Keep the current application demoable at every stage and be prepared to implement a small feature live.
+This is an independent document-analysis project, not a hiring submission. Read `README.md` and `PROMPT_FOR_CODEX.md` before editing.
+
+Make small, testable changes. Run `python -m pytest -q` and `ruff check src tests app.py scripts` before merging. Do not claim tests ran unless they actually did.
+Never commit `.env`, API secrets, indexed databases, uploads, or confidential source documents. Preserve read-only LLM tools and source citations. Do not allow the model to execute arbitrary code, SQL, or shell commands.
+Maintain provider portability, deterministic financial calculations, and explicit uncertainty when extraction fails. Hybrid retrieval is a planned improvement; don't describe it as implemented until it is tested and integrated.
+Prefer readable Python over excessively compressed expressions, with comments explaining non-obvious logic.

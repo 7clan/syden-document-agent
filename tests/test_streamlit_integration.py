@@ -7,9 +7,9 @@ from openpyxl import Workbook
 from reportlab.pdfgen.canvas import Canvas
 from streamlit.testing.v1 import AppTest
 
-from syden_agent.agent import Answer
-from syden_agent.db import connect
-from syden_agent.tools import extract_dates, query_spreadsheet
+from document_agent.agent import Answer
+from document_agent.db import connect
+from document_agent.tools import extract_dates, query_spreadsheet
 
 
 def test_switching_folders_clears_answer_and_blocks_stale_index(tmp_path, monkeypatch):
@@ -24,7 +24,7 @@ def test_switching_folders_clears_answer_and_blocks_stale_index(tmp_path, monkey
                  (str(old_folder),))
     conn.commit()
     conn.close()
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_path))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_path))
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GEMINI_API_KEY", "synthetic-not-a-real-key")
     app = Path(__file__).resolve().parents[1] / "app.py"
@@ -61,7 +61,7 @@ def test_streamlit_indexes_and_displays_verified_boq(tmp_path, monkeypatch):
     pdf.drawString(72, 700, "Submit design drawings by 15 November 2026.")
     pdf.save()
     db_path = tmp_path / "app.db"
-    monkeypatch.setenv("SYDEN_DB_PATH", str(db_path))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(db_path))
     app = Path(__file__).resolve().parents[1] / "app.py"
     page = AppTest.from_file(app, default_timeout=10).run()
     assert not page.exception

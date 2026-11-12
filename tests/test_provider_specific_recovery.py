@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from syden_agent.agent import (
+from document_agent.agent import (
     OLLAMA_GPT_OSS_20B_TOOLS,
     ProviderRateLimitError,
     _ask_gemini,
     _ask_openai,
     provider_error_diagnostic,
 )
-from syden_agent.db import connect
+from document_agent.db import connect
 
 CITE = "Memo.pdf | page 1 | chunk 0"
 ANSWER = ('{"answer":"ARBOR-17","insufficient":false,"claims":'
@@ -47,7 +47,7 @@ def _client(monkeypatch, responses):
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: client))
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-only")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-only")
-    monkeypatch.setattr("syden_agent.agent.time.sleep", lambda _: None)
+    monkeypatch.setattr("document_agent.agent.time.sleep", lambda _: None)
     return requests
 
 
@@ -61,7 +61,7 @@ class ServerError(Exception):
 
 def test_server_error_diagnostic_is_specific_and_sanitized():
     error = ServerError("private response contents")
-    error._syden_phase = "tool"
+    error._document_phase = "tool"
     assert provider_error_diagnostic(error) == {
         "http_status": 500, "code": "server_error", "phase": "tool"}
 
@@ -146,7 +146,7 @@ def test_groq_gpt_empty_no_arg_call_is_repaired_and_audited(monkeypatch):
 def test_groq_rate_limit_after_tool_keeps_python_boq_result(monkeypatch, tmp_path):
     from openpyxl import Workbook
 
-    from syden_agent.ingest import ingest_folder
+    from document_agent.ingest import ingest_folder
 
     class Groq429(Exception):
         status_code = 429
@@ -221,7 +221,7 @@ def test_slow_gemini_numeric_request_completes_from_indexed_cells(monkeypatch, t
     from google.genai import types
     from openpyxl import Workbook
 
-    from syden_agent.ingest import ingest_folder
+    from document_agent.ingest import ingest_folder
 
     book = Workbook()
     sheet = book.active
@@ -233,7 +233,7 @@ def test_slow_gemini_numeric_request_completes_from_indexed_cells(monkeypatch, t
     conn = connect(":memory:")
     ingest_folder(conn, tmp_path)
     clock = {"now": 0.0}
-    monkeypatch.setattr("syden_agent.agent.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("document_agent.agent.time.monotonic", lambda: clock["now"])
 
     def generate_content(**_):
         clock["now"] = 80.0

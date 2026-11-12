@@ -3,7 +3,7 @@ import json
 import sys
 from types import SimpleNamespace
 
-from syden_agent.agent import (
+from document_agent.agent import (
     NON_GEMMA_EVIDENCE_CHECK,
     SYSTEM,
     _ask_openai,
@@ -11,7 +11,7 @@ from syden_agent.agent import (
     provider_error_diagnostic,
     safe_provider_error,
 )
-from syden_agent.db import connect
+from document_agent.db import connect
 
 CITE = "02_Approved_Change_Order_CO07.pdf | page 1 | chunk 0"
 AMOUNT = "SAR 7,070,000"

@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from syden_agent.agent import (
+from document_agent.agent import (
     ProviderOutputParseError,
     _ask_openai,
     safe_provider_error,
 )
-from syden_agent.db import connect
+from document_agent.db import connect
 
 CITE = "Memo.pdf | page 1 | chunk 0"
 FINAL = ('{"answer":"Code ARBOR-17","insufficient":false,"claims":['
@@ -160,7 +160,7 @@ def test_malformed_tool_arguments_never_execute_and_never_create_evidence(monkey
 def test_groq_tool_result_keeps_deterministic_boq_amounts(monkeypatch, tmp_path):
     from openpyxl import Workbook
 
-    from syden_agent.ingest import ingest_folder
+    from document_agent.ingest import ingest_folder
 
     book = Workbook()
     sheet = book.active

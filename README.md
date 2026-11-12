@@ -1,4 +1,6 @@
-# SYDEN Document Agent
+# Document Intelligence Agent
+
+Independent, source-grounded document analysis for PDF, Excel, and Word. **Current retrieval is lexical; hybrid keyword + semantic retrieval is planned, not yet implemented.** See [hybrid retrieval plan](docs/HYBRID_RETRIEVAL_PLAN.md).
 
 A source-aware AI document assistant for project contracts and Bills of Quantities (BOQs).
 It indexes text PDFs, Excel workbooks and Word documents, implements deterministic
@@ -35,8 +37,8 @@ Source-linked model prose still needs human review.
 ## Quick start — Windows PowerShell
 
 ```powershell
-git clone https://github.com/7clan/syden-document-agent.git
-cd syden-document-agent
+git clone <repository-url>
+cd document-intelligence-agent
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[openai,dev]"
@@ -44,12 +46,12 @@ Copy-Item .env.example .env
 # Open .env and add OLLAMA_API_KEY for the default Gemma model; never commit it.
 New-Item -ItemType Directory -Force documents | Out-Null
 # Copy your TEST documents into documents/ (they will not be committed).
-syden-agent ingest "documents"
-syden-agent list
-syden-agent boq --value 1000000 --currency SAR  # deterministic query without an API call
-syden-agent dates --limit 100 --offset 0         # paginated date candidates
-syden-agent ask "List all cost items above SAR 1 million in the BOQs"
-syden-agent smoke  # tests real provider function calling with synthetic, nonconfidential text
+document-agent ingest "documents"
+document-agent list
+document-agent boq --value 1000000 --currency SAR  # deterministic query without an API call
+document-agent dates --limit 100 --offset 0         # paginated date candidates
+document-agent ask "List all cost items above SAR 1 million in the BOQs"
+document-agent smoke  # tests real provider function calling with synthetic, nonconfidential text
 python -m streamlit run app.py
 ```
 
@@ -91,12 +93,12 @@ Selecting files through the browser upload saves them to disk and **automaticall
 runs indexing** without pressing the Index folder button.
 
 On a fresh app session, the folder field defaults to `.local/demo_documents` when
-that directory exists. Interview test documents and their result JSON and SQLite
+that directory exists. Test documents and their result JSON and SQLite
 files under other `.local` directories are separate and are not scanned. If the
 app database was last used with a different folder, click **Index folder** once
 for the selected demo folder before asking. The Ask button stays disabled until
-the selected folder is the active index, so an earlier interview corpus cannot
-silently answer a demo question. `SYDEN_DB_PATH` controls the app's SQLite index;
+the selected folder is the active index, so an earlier document corpus cannot
+silently answer a demo question. `DOCUMENT_AGENT_DB_PATH` controls the app's SQLite index;
 test runners may create separate per-test databases. These indexes can be rebuilt
 from the original documents.
 
@@ -124,7 +126,7 @@ Each passage-level source reference has an **Open source** button. It opens the
 exact indexed PDF page and chunk, Word paragraph or table row, or Excel row or
 cell. For local PDFs, the panel also renders the original page when the file is
 still present in the indexed folder. The citation remains visible beside the
-source content. This helps a reviewer check a model's interpretation; it is
+source content. This helps a user check a model's interpretation; it is
 not an automatic fact-verification verdict.
 
 The active path **does not run the old claim verifier**. It does not judge model
@@ -253,7 +255,7 @@ OpenAI and other compatible APIs, install the optional client:
 `python -m pip install -e ".[openai,dev]"`.
 The listing metadata identifies advertised tool support; it cannot guarantee
 reliable function calling in a specific live question. Test using
-`syden-agent smoke --provider <provider>` or a real question.
+`document-agent smoke --provider <provider>` or a real question.
 
 For OpenAI as provider, install `pip install -e ".[openai,dev]"`, set `LLM_PROVIDER=openai`
 and `OPENAI_API_KEY` in `.env`.
@@ -266,7 +268,7 @@ including hosted Llama when available. This is a hosted API, not Ollama running 
 For another OpenAI Chat Completions-compatible provider, use `LLM_PROVIDER=compatible`
 and set `COMPATIBLE_API_KEY`, `COMPATIBLE_MODEL`, `COMPATIBLE_BASE_URL`.
 Provider feature parity is **not** guaranteed: test custom tool calling with the exact model
-and SDK before relying on it in the live interview.
+and SDK before relying on it in a live demonstration.
 
 For **Ollama Cloud direct API**, install `pip install -e ".[openai,dev]"`, set
 `LLM_PROVIDER=ollama_cloud`, `OLLAMA_API_KEY`, and `OLLAMA_MODEL` in `.env`.
@@ -284,8 +286,8 @@ selected model before a demo.
 Copy `.env.example` to `.env` and fill only the provider you use. `LLM_PROVIDER` selects
 `gemini`, `openai`, `groq`, `ollama_cloud`, or `compatible`. Each provider has its own
 `*_API_KEY` and `*_MODEL`; OpenAI-compatible services also accept a `*_BASE_URL`.
-`SYDEN_DB_PATH` selects the local SQLite index (default `.local/syden_documents.db`), and
-`SYDEN_MAX_FILE_MB` sets the per-file size limit (default 100 MiB). Keep `.env` private.
+`DOCUMENT_AGENT_DB_PATH` selects the local SQLite index (default `.local/document_index.db`), and
+`DOCUMENT_AGENT_MAX_FILE_MB` sets the per-file size limit (default 100 MiB). Keep `.env` private.
 
 ## macOS/Linux
 
@@ -296,8 +298,8 @@ pip install -e '.[openai,dev]'
 cp .env.example .env
 # Add OLLAMA_API_KEY for the default Gemma model. Keep .env private.
 mkdir -p documents
-syden-agent ingest documents
-syden-agent ask 'Summarize the scope of work in this contract'
+document-agent ingest documents
+document-agent ask 'Summarize the scope of work in this contract'
 python -m streamlit run app.py
 ```
 
@@ -328,17 +330,17 @@ ruff check src tests app.py scripts
 ```
 
 Tests construct synthetic workbooks and Word documents in temporary directories. No API credentials are needed for
-these unit tests. Run `syden-agent smoke --provider gemini`, `--provider groq`, or
+these unit tests. Run `document-agent smoke --provider gemini`, `--provider groq`, or
 `--provider ollama_cloud` with your own key before relying on the model in a demo.
 `success: true` requires an actual provider tool call, a verified source, and the exact
 synthetic answer. The smoke command does not read your indexed documents.
 The final local suite on 21 October 2026 passed **272 tests with 1 skipped**;
-Ruff passed. [GitHub Actions](https://github.com/7clan/syden-document-agent/actions/workflows/ci.yml)
+Ruff passed. GitHub Actions
 runs the same gate on repository updates; check its latest run before a demo.
 Earlier test history and individual regression scenarios remain in
 [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
-### Live interview-style provider results (21 October 2026)
+### Initial live provider test results (21 October 2026)
 
 A new, previously unused folder of seven fictional files (three PDFs, three
 Excel workbooks and one Word document) was tested through the production
@@ -391,26 +393,24 @@ These references originate from stored metadata and are checked against indexed 
 Answers are not guaranteed correct solely because a model produces them; verify results
 against independent acceptance fixtures.
 
-## SYDEN assessment notes
+## Project history and development notes
 
-The original brief scores delivery time, readable code/documentation and live accuracy on unseen
-documents. The candidate must provide a GitHub repository and approximately half a page describing
-actual coding-agent usage, actual hours spent, decisions and improvements with more time.
-The [development note](docs/DEVELOPMENT_NOTE.md) records OpenAI Codex use,
-design decisions, limitations and the candidate's approximately 11-hour
-estimate of active involvement. This is an estimate, not a time-tracking log.
+This project began as a time-boxed document-analysis prototype and is now maintained as an independent tool.
+The [development history](docs/DEVELOPMENT_NOTE.md) records its initial implementation,
+test approach, provider choices and limitations. The next improvement is
+[hybrid retrieval](docs/HYBRID_RETRIEVAL_PLAN.md), not yet implemented.
 
 ## Credentials and source-only archive
 
 The audit found that an earlier ZIP contained `.env`. `.gitignore` does not protect ZIP files.
-Rotate those exposed provider keys before submission. Do not include `.env`, local databases,
+If keys from that archive are still active, rotate them before sharing the project. Do not include `.env`, local databases,
 or real company files in a GitHub repository or shared archive. To create an allowlisted archive:
 
 ```powershell
 python scripts/package_submission.py
 ```
 
-The output is `.local/submission/syden-document-agent.zip`. Its contents are checked by an
+The output is `.local/submission/document-intelligence-agent.zip`. Its contents are checked by an
 offline test. Inspect the archive yourself before sharing it; this command does not rotate keys.
 
 ## References
@@ -425,11 +425,8 @@ offline test. Inspect the archive yourself before sharing it; this command does 
 - [xlrd legacy Excel reader](https://xlrd.readthedocs.io/en/latest/)
 - [python-docx document order](https://python-docx.readthedocs.io/en/latest/api/document.html)
 
-## Repository and submission
+## Repository and releases
 
-The project is already published at [7clan/syden-document-agent](https://github.com/7clan/syden-document-agent),
-with the current application on `main`. The previous `main` commit was preserved
-on `archive/main-before-evidence-first-2026-10-21`. The source-only archive
-above is optional; the GitHub repository and the development note are the
-assessment deliverables. Keep credentials and generated document databases out
-of anything shared with reviewers.
+The application is maintained in this repository. Git history preserves the initial project
+version; the source-only archive script is optional. Keep credentials, real documents and
+local SQLite indexes out of any shared release.

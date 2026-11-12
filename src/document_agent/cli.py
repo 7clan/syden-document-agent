@@ -15,7 +15,7 @@ from .tools import extract_dates, list_documents, query_spreadsheet
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="SYDEN grounded document analysis agent")
+    parser = argparse.ArgumentParser(description="Source-grounded document intelligence agent")
     commands = parser.add_subparsers(dest="command", required=True)
     add = commands.add_parser("ingest", help="Index PDF, Word and Excel documents from a folder")
     add.add_argument("folder")
@@ -44,7 +44,7 @@ def main() -> None:
     if getattr(options, "provider", None):
         os.environ["LLM_PROVIDER"] = options.provider
     conn = connect(":memory:" if options.command == "smoke" else
-                   os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
+                   os.getenv("DOCUMENT_AGENT_DB_PATH", ".local/document_index.db"))
     try:
         if options.command == "ingest":
             result = ingest_folder(conn, options.folder)

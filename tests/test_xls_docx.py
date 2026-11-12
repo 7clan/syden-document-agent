@@ -10,9 +10,9 @@ import xlwt
 from docx import Document
 from openpyxl import Workbook
 
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import (
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.tools import (
     extract_dates,
     get_evidence,
     inspect_document,

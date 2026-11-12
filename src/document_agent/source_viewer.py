@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from syden_agent.tools import get_evidence
+from document_agent.tools import get_evidence
 
 
 def source_detail(conn: sqlite3.Connection, citation: str) -> dict[str, Any]:

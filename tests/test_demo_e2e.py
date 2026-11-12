@@ -1,9 +1,9 @@
 """End-to-end deterministic acceptance check using only generated documents."""
 
+from document_agent.db import connect
+from document_agent.ingest import ingest_folder
+from document_agent.tools import extract_dates, get_evidence, query_spreadsheet, search_documents
 from scripts.create_demo import create_demo
-from syden_agent.db import connect
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import extract_dates, get_evidence, query_spreadsheet, search_documents
 
 
 def test_demo_answers_have_exact_source_locations(tmp_path):

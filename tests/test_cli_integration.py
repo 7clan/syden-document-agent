@@ -6,7 +6,7 @@ import sys
 
 from openpyxl import Workbook
 
-from syden_agent.cli import main
+from document_agent.cli import main
 
 
 def test_cli_ingest_boq_dates_and_list(tmp_path, monkeypatch, capsys):
@@ -16,10 +16,10 @@ def test_cli_ingest_boq_dates_and_list(tmp_path, monkeypatch, capsys):
     sheet.append(["Item", "Total Amount (SAR)", "Due"])
     sheet.append(["Transformer", 1_500_000, "2026-11-15"])
     book.save(tmp_path / "BOQ.xlsx")
-    monkeypatch.setenv("SYDEN_DB_PATH", str(tmp_path / "index.db"))
+    monkeypatch.setenv("DOCUMENT_AGENT_DB_PATH", str(tmp_path / "index.db"))
 
     def run(*args):
-        monkeypatch.setattr(sys, "argv", ["syden-agent", *args])
+        monkeypatch.setattr(sys, "argv", ["document-agent", *args])
         main()
         return json.loads(capsys.readouterr().out)
 

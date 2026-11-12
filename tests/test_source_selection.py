@@ -1,9 +1,9 @@
 """Regression cases for provider file filters and narrowly grounded references."""
 from __future__ import annotations
 
-from syden_agent.agent import _final_answer
-from syden_agent.db import connect
-from syden_agent.tools import TOOL_SCHEMAS, search_documents
+from document_agent.agent import _final_answer
+from document_agent.db import connect
+from document_agent.tools import TOOL_SCHEMAS, search_documents
 
 
 def _docs():

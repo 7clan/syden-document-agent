@@ -43,6 +43,6 @@ def package(destination: Path) -> Path:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", nargs="?", default=".local/submission/syden-document-agent.zip")
+    parser.add_argument("output", nargs="?", default=".local/submission/document-intelligence-agent.zip")
     args = parser.parse_args()
     print(f"Created source-only archive: {package(Path(args.output))}")

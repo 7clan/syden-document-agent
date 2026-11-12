@@ -11,15 +11,15 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from syden_agent import model_catalog
-from syden_agent.agent import ask, provider_error_diagnostic, safe_provider_error
-from syden_agent.db import connect
-from syden_agent.file_manager import folder_files, remove_document
-from syden_agent.ingest import ingest_folder
-from syden_agent.source_viewer import local_pdf_page, source_detail
-from syden_agent.tools import extract_dates, list_documents, query_spreadsheet
-from syden_agent.ui_format import display_safe_rows
-from syden_agent.uploads import save_uploaded_file
+from document_agent import model_catalog
+from document_agent.agent import ask, provider_error_diagnostic, safe_provider_error
+from document_agent.db import connect
+from document_agent.file_manager import folder_files, remove_document
+from document_agent.ingest import ingest_folder
+from document_agent.source_viewer import local_pdf_page, source_detail
+from document_agent.tools import extract_dates, list_documents, query_spreadsheet
+from document_agent.ui_format import display_safe_rows
+from document_agent.uploads import save_uploaded_file
 
 load_dotenv()
 
@@ -31,10 +31,10 @@ def _cached_model_catalog(provider: str, key_fingerprint: str,
     return model_catalog.discover_models(provider, _api_key)
 
 
-st.set_page_config(page_title="SYDEN Document Agent", page_icon="📄", layout="wide")
+st.set_page_config(page_title="Document Intelligence Agent", page_icon="📄", layout="wide")
 st.title("Project Document Agent")
 st.caption("PDFs + Excel + Word · Evidence-grounded answers · Read-only tool calling")
-conn = connect(os.getenv("SYDEN_DB_PATH", ".local/syden_documents.db"))
+conn = connect(os.getenv("DOCUMENT_AGENT_DB_PATH", ".local/document_index.db"))
 PROVIDERS = {
     "gemini": ("Google Gemini", "GEMINI_API_KEY", "GEMINI_MODEL", "gemini-2.5-flash"),
     "groq": ("Groq", "GROQ_API_KEY", "GROQ_MODEL", "openai/gpt-oss-20b"),
@@ -108,7 +108,7 @@ with st.sidebar:
         selected_model = model_choice
     unsupported_model = bool(discovered and selected_model in discovered.unsupported)
     if unsupported_model:
-        st.warning("This model is listed without the tool-calling capability SYDEN needs.")
+        st.warning("This model is listed without the tool-calling capability the application requires.")
     elif (discovered and selected_model and model_choice != CUSTOM_MODEL
           and selected_model not in {choice.id for choice in discovered.models}):
         st.warning("This model ID was not in the current compatible model list. "
@@ -177,7 +177,7 @@ with st.sidebar:
         added: list[str] = []
         replaced: list[str] = []
         errors: list[str] = []
-        max_bytes = int(os.getenv("SYDEN_MAX_FILE_MB", "100")) * 1024 * 1024
+        max_bytes = int(os.getenv("DOCUMENT_AGENT_MAX_FILE_MB", "100")) * 1024 * 1024
         with st.spinner("Saving and indexing selected documents..."):
             for selected in selected_files:
                 try:
@@ -456,5 +456,5 @@ if "last_answer" in st.session_state:
             if "csv_export" in st.session_state:
                 st.download_button("Download all matches as CSV",
                                    st.session_state["csv_export"],
-                                   file_name="syden_spreadsheet_matches.csv",
+                                   file_name="document_spreadsheet_matches.csv",
                                    mime="text/csv")

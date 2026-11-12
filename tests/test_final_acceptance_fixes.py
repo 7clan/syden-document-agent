@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from google import genai
 from google.genai import types
 
-from syden_agent.agent import (
+from document_agent.agent import (
     _ask_gemini,
     _checked_financial_comparison,
     _financial_comparison_context,
@@ -16,7 +16,7 @@ from syden_agent.agent import (
     _source_linked_answer,
     _verified_numeric_answer,
 )
-from syden_agent.db import connect
+from document_agent.db import connect
 
 
 def _row(conn, document_id, sheet, number, values):

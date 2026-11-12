@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from reportlab.pdfgen import canvas
 
-from syden_agent.db import connect
-from syden_agent.file_manager import folder_files, remove_document
-from syden_agent.ingest import ingest_folder
-from syden_agent.tools import list_documents, search_documents
+from document_agent.db import connect
+from document_agent.file_manager import folder_files, remove_document
+from document_agent.ingest import ingest_folder
+from document_agent.tools import list_documents, search_documents
 
 
 def _pdf(sentence: str) -> bytes:

@@ -45,7 +45,7 @@ def save_uploaded_file(folder: str | Path, filename: str,
         temporary: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
-                    mode="wb", dir=destination, prefix=".syden-update-",
+                    mode="wb", dir=destination, prefix=".document-update-",
                     suffix=".tmp", delete=False) as handle:
                 temporary = Path(handle.name)
                 handle.write(content)

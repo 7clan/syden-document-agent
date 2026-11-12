@@ -35,7 +35,7 @@ Do not mark rows passed until they have actually been executed and independently
 ## Reproducible synthetic demo
 
 Run `python scripts/create_demo.py` once from the repository root, then
-`syden-agent ingest ".local/demo_documents"`. The script refuses to overwrite an
+`document-agent ingest ".local/demo_documents"`. The script refuses to overwrite an
 existing folder. These files contain invented project data, not employer documents.
 The deterministic assertions are in `tests/test_demo_e2e.py`.
 
@@ -372,7 +372,7 @@ unfamiliar documents or prove arbitrary model interpretations.
 A separate fictional folder was generated under ignored
 `.local/interview_blind_20261020` with one contract PDF and two XLSX BOQs. Its
 names, values, layouts and dates differ from the development fixtures. The three
-questions below use the exact wording in SYDEN's brief and were sent through
+questions below use the exact wording in Document Intelligence Agent's brief and were sent through
 the CLI to the configured real Gemini provider, one at a time. The resulting
 answers were compared against the generated source files, not inferred from
 their citation status.

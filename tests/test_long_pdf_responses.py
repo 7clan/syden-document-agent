@@ -1,9 +1,9 @@
 """Regress contract and inspection questions against wrapped PDF text."""
 from __future__ import annotations
 
-from syden_agent.agent import _final_answer, _source_clauses, _supported_prose, ask
-from syden_agent.db import connect
-from syden_agent.tools import search_documents
+from document_agent.agent import _final_answer, _source_clauses, _supported_prose, ask
+from document_agent.db import connect
+from document_agent.tools import search_documents
 
 
 def _evidence(pages):
