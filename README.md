@@ -93,11 +93,11 @@ Selecting files through the browser upload saves them to disk and **automaticall
 runs indexing** without pressing the Index folder button.
 
 On a fresh app session, the folder field defaults to `.local/demo_documents` when
-that directory exists. Interview test documents and their result JSON and SQLite
+that directory exists. Test documents and their result JSON and SQLite
 files under other `.local` directories are separate and are not scanned. If the
 app database was last used with a different folder, click **Index folder** once
 for the selected demo folder before asking. The Ask button stays disabled until
-the selected folder is the active index, so an earlier interview corpus cannot
+the selected folder is the active index, so an earlier document corpus cannot
 silently answer a demo question. `DOCUMENT_AGENT_DB_PATH` controls the app's SQLite index;
 test runners may create separate per-test databases. These indexes can be rebuilt
 from the original documents.
@@ -126,7 +126,7 @@ Each passage-level source reference has an **Open source** button. It opens the
 exact indexed PDF page and chunk, Word paragraph or table row, or Excel row or
 cell. For local PDFs, the panel also renders the original page when the file is
 still present in the indexed folder. The citation remains visible beside the
-source content. This helps a reviewer check a model's interpretation; it is
+source content. This helps a user check a model's interpretation; it is
 not an automatic fact-verification verdict.
 
 The active path **does not run the old claim verifier**. It does not judge model
@@ -268,7 +268,7 @@ including hosted Llama when available. This is a hosted API, not Ollama running 
 For another OpenAI Chat Completions-compatible provider, use `LLM_PROVIDER=compatible`
 and set `COMPATIBLE_API_KEY`, `COMPATIBLE_MODEL`, `COMPATIBLE_BASE_URL`.
 Provider feature parity is **not** guaranteed: test custom tool calling with the exact model
-and SDK before relying on it in the live interview.
+and SDK before relying on it in a live demonstration.
 
 For **Ollama Cloud direct API**, install `pip install -e ".[openai,dev]"`, set
 `LLM_PROVIDER=ollama_cloud`, `OLLAMA_API_KEY`, and `OLLAMA_MODEL` in `.env`.
@@ -340,7 +340,7 @@ runs the same gate on repository updates; check its latest run before a demo.
 Earlier test history and individual regression scenarios remain in
 [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
-### Live interview-style provider results (21 October 2026)
+### Initial live provider test results (21 October 2026)
 
 A new, previously unused folder of seven fictional files (three PDFs, three
 Excel workbooks and one Word document) was tested through the production
@@ -393,19 +393,17 @@ These references originate from stored metadata and are checked against indexed 
 Answers are not guaranteed correct solely because a model produces them; verify results
 against independent acceptance fixtures.
 
-## Document Intelligence Agent assessment notes
+## Project history and development notes
 
-The original brief scores delivery time, readable code/documentation and live accuracy on unseen
-documents. The candidate must provide a GitHub repository and approximately half a page describing
-actual coding-agent usage, actual hours spent, decisions and improvements with more time.
-The [development note](docs/DEVELOPMENT_NOTE.md) records OpenAI Codex use,
-design decisions, limitations and the candidate's approximately 11-hour
-estimate of active involvement. This is an estimate, not a time-tracking log.
+This project began as a time-boxed document-analysis prototype and is now maintained as an independent tool.
+The [development history](docs/DEVELOPMENT_NOTE.md) records its initial implementation,
+test approach, provider choices and limitations. The next improvement is
+[hybrid retrieval](docs/HYBRID_RETRIEVAL_PLAN.md), not yet implemented.
 
 ## Credentials and source-only archive
 
 The audit found that an earlier ZIP contained `.env`. `.gitignore` does not protect ZIP files.
-Rotate those exposed provider keys before submission. Do not include `.env`, local databases,
+If keys from that archive are still active, rotate them before sharing the project. Do not include `.env`, local databases,
 or real company files in a GitHub repository or shared archive. To create an allowlisted archive:
 
 ```powershell
@@ -427,11 +425,8 @@ offline test. Inspect the archive yourself before sharing it; this command does 
 - [xlrd legacy Excel reader](https://xlrd.readthedocs.io/en/latest/)
 - [python-docx document order](https://python-docx.readthedocs.io/en/latest/api/document.html)
 
-## Repository and submission
+## Repository and releases
 
-The project is maintained in this repository,
-with the current application on `main`. The previous `main` commit was preserved
-on `archive/main-before-evidence-first-2026-10-21`. The source-only archive
-above is optional; the GitHub repository and the development note are the
-assessment deliverables. Keep credentials and generated document databases out
-of anything shared with reviewers.
+The application is maintained in this repository. Git history preserves the initial project
+version; the source-only archive script is optional. Keep credentials, real documents and
+local SQLite indexes out of any shared release.
