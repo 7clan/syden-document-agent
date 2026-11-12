@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "document-intelligence-agent"
 version = "0.1.0"
-description = "Source-grounded PDF, Excel and Word document analysis agent for the Document Intelligence Agent technical assessment"
+description = "Independent, source-grounded PDF, Excel and Word document analysis agent"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
